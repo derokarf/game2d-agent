@@ -24,6 +24,7 @@ import numpy as np
 import torch
 from envs.pixel_env import PixelGameEnv
 from envs.wrappers import make_env
+from torch import device
 
 # ---------------------------------------------------------------------------
 # Policy stub
@@ -58,31 +59,24 @@ def load_policy(model_path: str, n_actions: int, device: torch.device):
         {
             "policy_state_dict": OrderedDict,   # nn.Module weights
             "n_actions": int,                   # action-space size
-            "obs_shape": tuple,                 # (H, W, C) after wrappers
+            "obs_shape": tuple,                 # (C, H, W) — channel-first
         }
 
     If the file does not exist, falls back to RandomPolicy with a warning.
-    When models/policy.py is ready, replace the import below with:
-        from models.policy import CNNActorCritic
-        policy = CNNActorCritic(obs_shape, n_actions)
-        policy.load_state_dict(ckpt["policy_state_dict"])
     """
+    from models.policy import CNNActorCritic
+
     if not os.path.isfile(model_path):
         print(f"[WARNING] Checkpoint not found: {model_path}")
         print("[WARNING] Falling back to RandomPolicy (for testing only).")
         return RandomPolicy(n_actions)
 
-    ckpt = torch.load(model_path, map_location=device)
-
-    # When CNNActorCritic exists, swap these two lines in:
-    # from models.policy import CNNActorCritic
-    # policy = CNNActorCritic(ckpt["obs_shape"], ckpt["n_actions"])
-    # policy.load_state_dict(ckpt["policy_state_dict"])
-
-    # For now, warn and use random to keep the script runnable.
-    print("[WARNING] CNNActorCritic not yet implemented (Week 2/3).")
-    print("[WARNING] Falling back to RandomPolicy.")
-    return RandomPolicy(n_actions)
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    obs_shape = tuple(ckpt["obs_shape"])   # e.g. (4, 84, 84) — (C, H, W)
+    policy = CNNActorCritic(obs_shape, ckpt["n_actions"])  # type: ignore[arg-type]
+    policy.load_state_dict(ckpt["policy_state_dict"])
+    policy.eval()
+    return policy
 
 
 # ---------------------------------------------------------------------------
