@@ -285,7 +285,7 @@ class EpisodicLifeWrapper(gymnasium.Wrapper):
 
         life_lost = (current_lives < self._lives) and not terminated
         self._lives = current_lives
-        self._real_done = terminated  # track whether game is truly over
+        self._real_done = terminated or truncated  # track whether game is truly over
 
         # Signal terminal to the agent on life loss even though the game
         # will continue (real reset happens only at true game-over).

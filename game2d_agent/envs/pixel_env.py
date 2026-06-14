@@ -52,6 +52,7 @@ class PixelGameEnv(gymnasium.Env):
             pygame.init()
         if self.screen is None:
             self.screen = pygame.Surface((self.screen_width, self.screen_height))
+            self._font = pygame.font.Font(None, 36)   # create once, reuse every step
 
     def _init_game(self):
         """Initialize your game state here."""
@@ -117,8 +118,7 @@ class PixelGameEnv(gymnasium.Env):
 
         pygame.draw.circle(self.screen, (0, 255, 0), (state["player_x"], state["player_y"]), 8)
 
-        font = pygame.font.Font(None, 36)
-        score_text = font.render(f"Score: {state['score']}", True, (255, 255, 255))
+        score_text = self._font.render(f"Score: {state['score']}", True, (255, 255, 255))
         self.screen.blit(score_text, (10, 10))
 
         frame = pygame.surfarray.array3d(self.screen)

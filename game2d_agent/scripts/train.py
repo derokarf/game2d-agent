@@ -31,6 +31,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Use SDL dummy video driver so pygame doesn't need an X11 display.
+# Must be set before any pygame import (which happens inside envs/).
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
 import numpy as np
 import torch
 from gymnasium.vector import SyncVectorEnv
@@ -277,8 +281,9 @@ def train(args: argparse.Namespace) -> None:
     )
     print("-" * 110)
 
-    global_step = 0
-    t_start     = time.time()
+    global_step      = 0
+    t_start          = time.time()
+    best_mean_reward = -np.inf
 
     for iteration in range(1, total_iters + 1):
         t_iter = time.time()
@@ -294,7 +299,7 @@ def train(args: argparse.Namespace) -> None:
 
         with torch.no_grad():
             for _ in range(config.n_steps):
-                action, log_prob, _entropy, value = policy.get_action_and_value(obs)
+                action, log_prob, _, value = policy.get_action_and_value(obs)
 
                 cpu_actions = action.cpu().numpy()
                 next_obs_np, reward_np, terminated_np, truncated_np, _ = envs.step(cpu_actions)
@@ -323,6 +328,15 @@ def train(args: argparse.Namespace) -> None:
         sps      = steps_per_iter / (time.time() - t_iter)
         ep_stats = tracker.stats()
         log_metrics(writer, metrics, iteration, global_step, ep_stats, current_lr, sps)
+
+        # ── Best checkpoint ───────────────────────────────────────────────────
+        mean_rew = ep_stats.get("mean_reward", float("nan"))
+        if ep_stats["n_episodes"] > 0 and mean_rew > best_mean_reward:
+            best_mean_reward = mean_rew
+            path = save_checkpoint(
+                policy, obs_shape, n_actions, iteration, global_step, save_dir, tag="best"
+            )
+            print(f"  [best] new best {best_mean_reward:.3f} → {path}")
 
         # ── Periodic checkpoint ───────────────────────────────────────────────
         if iteration % args.save_interval == 0:
@@ -370,7 +384,7 @@ if __name__ == "__main__":
 
     # Optimiser
     parser.add_argument("--learning-rate",   type=float, default=2.5e-4)
-    parser.add_argument("--anneal-lr",       action="store_true", default=True)
+    parser.add_argument("--anneal-lr",       action=argparse.BooleanOptionalAction, default=True)
 
     # Infrastructure
     parser.add_argument("--seed",            type=int,   default=42)
