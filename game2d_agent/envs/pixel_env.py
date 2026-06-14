@@ -59,7 +59,7 @@ class PixelGameEnv(gymnasium.Env):
         self.game_state = {
             "player_x": self.screen_width // 2,
             "player_y": self.screen_height // 2,
-            "player_speed": 5,
+            "player_speed": 8,
             "targets": self._spawn_targets(5),
             "obstacles": self._spawn_obstacles(3),
             "score": 0,
@@ -69,9 +69,9 @@ class PixelGameEnv(gymnasium.Env):
     def _spawn_targets(self, count):
         return [
             {
-                "x": np.random.randint(20, self.screen_width - 20),
-                "y": np.random.randint(20, self.screen_height - 20),
-                "radius": 10,
+                "x": np.random.randint(30, self.screen_width - 30),
+                "y": np.random.randint(30, self.screen_height - 30),
+                "radius": 25,
             }
             for _ in range(count)
         ]
@@ -81,8 +81,8 @@ class PixelGameEnv(gymnasium.Env):
             {
                 "x": np.random.randint(50, self.screen_width - 50),
                 "y": np.random.randint(50, self.screen_height - 50),
-                "w": np.random.randint(30, 80),
-                "h": np.random.randint(30, 80),
+                "w": np.random.randint(60, 120),
+                "h": np.random.randint(60, 120),
             }
             for _ in range(count)
         ]
@@ -116,7 +116,7 @@ class PixelGameEnv(gymnasium.Env):
         for tgt in state["targets"]:
             pygame.draw.circle(self.screen, (255, 200, 0), (tgt["x"], tgt["y"]), tgt["radius"])
 
-        pygame.draw.circle(self.screen, (0, 255, 0), (state["player_x"], state["player_y"]), 8)
+        pygame.draw.circle(self.screen, (0, 255, 0), (state["player_x"], state["player_y"]), 20)
 
         score_text = self._font.render(f"Score: {state['score']}", True, (255, 255, 255))
         self.screen.blit(score_text, (10, 10))
@@ -137,7 +137,7 @@ class PixelGameEnv(gymnasium.Env):
         collected = []
         for i, tgt in enumerate(state["targets"]):
             dist = np.sqrt((player_pos[0] - tgt["x"]) ** 2 + (player_pos[1] - tgt["y"]) ** 2)
-            if dist < tgt["radius"] + 8:
+            if dist < tgt["radius"] + 20:
                 collected.append(i)
                 reward += 10.0
 

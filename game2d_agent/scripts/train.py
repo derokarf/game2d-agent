@@ -58,7 +58,7 @@ def make_single_env(rank: int, seed: int):
     """
     def _init():
         env = make_env(
-            env_factory=lambda: PixelGameEnv(frame_size=(84, 84), max_steps=5000),
+            env_factory=lambda: PixelGameEnv(frame_size=(84, 84), max_steps=1000),
             frame_size=(84, 84),
             num_stack=4,
             reward_clip=(-1.0, 1.0),
