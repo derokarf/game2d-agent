@@ -263,7 +263,7 @@ def train(args: argparse.Namespace) -> None:
     # ── Logging ──────────────────────────────────────────────────────────────
     run_name = f"ppo_{int(time.time())}"
     writer   = make_writer(os.path.join("logs", "ppo"), run_name) if args.track else None
-    save_dir = os.path.join("models", "ppo")
+    save_dir = args.save_dir
     tracker  = EpisodeTracker(config.n_envs)
 
     # ── Initial observations ──────────────────────────────────────────────────
@@ -394,6 +394,8 @@ if __name__ == "__main__":
                         help="Log to TensorBoard")
     parser.add_argument("--save-interval",   type=int,   default=50,
                         help="Save checkpoint every N iterations")
+    parser.add_argument("--save-dir",        type=str,   default=os.path.join("models", "ppo"),
+                        help="Directory to save checkpoints")
 
     args = parser.parse_args()
     train(args)
