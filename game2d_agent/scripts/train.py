@@ -25,6 +25,7 @@ Checkpoint format (plain PyTorch, loadable by play.py):
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 import time
@@ -90,16 +91,28 @@ def log_metrics(
     writer,
     metrics: dict,
     iteration: int,
+    total_iters: int,
     global_step: int,
     episode_stats: dict,
     lr: float,
     sps: float,
+    t_start: float,
 ) -> None:
     """Write all metrics to TensorBoard and print a summary line."""
     ep_rew = episode_stats.get("mean_reward", float("nan"))
     ep_len = episode_stats.get("mean_length", float("nan"))
     n_eps  = episode_stats.get("n_episodes", 0)
+
+    now     = datetime.datetime.now().strftime("%H:%M:%S")
+    elapsed = time.time() - t_start
+    eta_str = ""
+    if iteration % 50 == 0 and iteration > 0:
+        remaining_secs = elapsed / iteration * (total_iters - iteration)
+        eta = datetime.timedelta(seconds=int(remaining_secs))
+        eta_str = f" | eta {eta}"
+
     print(
+        f"[{now}] "
         f"iter {iteration:>5} | "
         f"steps {global_step:>8,} | "
         f"sps {sps:>6.0f} | "
@@ -112,6 +125,7 @@ def log_metrics(
         f"kl {metrics['approx_kl']:>8.6f} | "
         f"ev {metrics['explained_variance']:>6.3f} | "
         f"lr {lr:.2e}"
+        f"{eta_str}"
     )
 
     if writer is None:
@@ -327,7 +341,7 @@ def train(args: argparse.Namespace) -> None:
         # ── Logging ──────────────────────────────────────────────────────────
         sps      = steps_per_iter / (time.time() - t_iter)
         ep_stats = tracker.stats()
-        log_metrics(writer, metrics, iteration, global_step, ep_stats, current_lr, sps)
+        log_metrics(writer, metrics, iteration, total_iters, global_step, ep_stats, current_lr, sps, t_start)
 
         # ── Best checkpoint ───────────────────────────────────────────────────
         mean_rew = ep_stats.get("mean_reward", float("nan"))
