@@ -64,6 +64,8 @@ class PixelGameEnv(gymnasium.Env):
             "obstacles": self._spawn_obstacles(3),
             "score": 0,
             "lives": 3,
+            "prev_target_dist": None,
+            "prev_obstacle_dist": None,
         }
 
     def _spawn_targets(self, count):
@@ -132,11 +134,14 @@ class PixelGameEnv(gymnasium.Env):
     def _compute_reward(self):
         reward = -0.01
         state = self.game_state
-        player_pos = (state["player_x"], state["player_y"])
+        px, py = state["player_x"], state["player_y"]
 
+        # ── Target collection ─────────────────────────────────────────────────
         collected = []
+        nearest_target_dist = float("inf")
         for i, tgt in enumerate(state["targets"]):
-            dist = np.sqrt((player_pos[0] - tgt["x"]) ** 2 + (player_pos[1] - tgt["y"]) ** 2)
+            dist = np.sqrt((px - tgt["x"]) ** 2 + (py - tgt["y"]) ** 2)
+            nearest_target_dist = min(nearest_target_dist, dist)
             if dist < tgt["radius"] + 20:
                 collected.append(i)
                 reward += 10.0
@@ -148,17 +153,37 @@ class PixelGameEnv(gymnasium.Env):
             state["targets"] = self._spawn_targets(5)
             state["score"] += 1
             reward += 50.0
+            nearest_target_dist = float("inf")  # recalc after respawn
 
+        # ── Obstacle proximity ────────────────────────────────────────────────
+        nearest_obstacle_dist = float("inf")
+        hit_obstacle = False
         for obs in state["obstacles"]:
-            if (
-                obs["x"] < player_pos[0] < obs["x"] + obs["w"]
-                and obs["y"] < player_pos[1] < obs["y"] + obs["h"]
-            ):
-                reward -= 5.0
-                state["lives"] -= 1
-                state["player_x"] = self.screen_width // 2
-                state["player_y"] = self.screen_height // 2
-                break
+            # Distance to nearest edge of the obstacle rectangle
+            cx = np.clip(px, obs["x"], obs["x"] + obs["w"])
+            cy = np.clip(py, obs["y"], obs["y"] + obs["h"])
+            dist = np.sqrt((px - cx) ** 2 + (py - cy) ** 2)
+            nearest_obstacle_dist = min(nearest_obstacle_dist, dist)
+
+            if dist == 0:  # player is inside the obstacle
+                if not hit_obstacle:
+                    reward -= 5.0
+                    state["lives"] -= 1
+                    state["player_x"] = self.screen_width // 2
+                    state["player_y"] = self.screen_height // 2
+                    hit_obstacle = True
+
+        # ── Progress shaping ──────────────────────────────────────────────────
+        # Reward getting closer to nearest target (k=0.05)
+        if state["prev_target_dist"] is not None and nearest_target_dist != float("inf"):
+            reward += 0.05 * (state["prev_target_dist"] - nearest_target_dist)
+
+        # Reward moving away from nearest obstacle (k=0.02)
+        if state["prev_obstacle_dist"] is not None and nearest_obstacle_dist != float("inf"):
+            reward += 0.02 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
+
+        state["prev_target_dist"] = nearest_target_dist if nearest_target_dist != float("inf") else None
+        state["prev_obstacle_dist"] = nearest_obstacle_dist if nearest_obstacle_dist != float("inf") else None
 
         return reward
 
