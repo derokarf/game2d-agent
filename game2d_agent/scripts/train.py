@@ -105,11 +105,6 @@ def log_metrics(
 
     now     = datetime.datetime.now().strftime("%H:%M:%S")
     elapsed = time.time() - t_start
-    eta_str = ""
-    if iteration % 50 == 0 and iteration > 0:
-        remaining_secs = elapsed / iteration * (total_iters - iteration)
-        eta = datetime.timedelta(seconds=int(remaining_secs))
-        eta_str = f" | eta {eta}"
 
     print(
         f"[{now}] "
@@ -125,8 +120,13 @@ def log_metrics(
         f"kl {metrics['approx_kl']:>8.6f} | "
         f"ev {metrics['explained_variance']:>6.3f} | "
         f"lr {lr:.2e}"
-        f"{eta_str}"
     )
+
+    if iteration % 50 == 0 and iteration > 0:
+        remaining_secs = elapsed / iteration * (total_iters - iteration)
+        eta = datetime.timedelta(seconds=int(remaining_secs))
+        done_pct = 100.0 * iteration / total_iters
+        print(f"  --> {done_pct:.1f}% done | elapsed {datetime.timedelta(seconds=int(elapsed))} | eta {eta}")
 
     if writer is None:
         return

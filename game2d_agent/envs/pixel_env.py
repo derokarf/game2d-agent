@@ -174,13 +174,13 @@ class PixelGameEnv(gymnasium.Env):
                     hit_obstacle = True
 
         # ── Progress shaping ──────────────────────────────────────────────────
-        # Reward getting closer to nearest target (k=0.05)
+        # Reward getting closer to nearest target (k=0.01)
         if state["prev_target_dist"] is not None and nearest_target_dist != float("inf"):
-            reward += 0.05 * (state["prev_target_dist"] - nearest_target_dist)
+            reward += 0.01 * (state["prev_target_dist"] - nearest_target_dist)
 
-        # Reward moving away from nearest obstacle (k=0.02)
+        # Reward moving away from nearest obstacle (k=0.005)
         if state["prev_obstacle_dist"] is not None and nearest_obstacle_dist != float("inf"):
-            reward += 0.02 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
+            reward += 0.005 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
 
         state["prev_target_dist"] = nearest_target_dist if nearest_target_dist != float("inf") else None
         state["prev_obstacle_dist"] = nearest_obstacle_dist if nearest_obstacle_dist != float("inf") else None
