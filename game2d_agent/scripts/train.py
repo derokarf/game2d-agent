@@ -62,7 +62,7 @@ def make_single_env(rank: int, seed: int):
             env_factory=lambda: PixelGameEnv(frame_size=(84, 84), max_steps=1000),
             frame_size=(84, 84),
             num_stack=4,
-            reward_clip=(-1.0, 1.0),
+            reward_clip=None,
             episodic_life=True,
         )
         env.reset(seed=seed + rank)
@@ -413,3 +413,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     train(args)
+    os._exit(0)

@@ -44,7 +44,7 @@ def make_pixel_env(render_mode: str, max_steps: int = 1000):
         env_factory=lambda: PixelGameEnv(frame_size=(84, 84), render_mode=render_mode, max_steps=max_steps),
         frame_size=(84, 84),
         num_stack=4,
-        reward_clip=(-1.0, 1.0),
+        reward_clip=None,
         episodic_life=False,  # full episodes for evaluation
     )
     return env
