@@ -45,7 +45,7 @@ def make_pixel_env(render_mode: str, max_steps: int = 1000):
         frame_size=(84, 84),
         num_stack=4,
         reward_clip=None,
-        episodic_life=False,  # full episodes for evaluation
+        episodic_life=False,
     )
     return env
 
@@ -63,8 +63,9 @@ def run_episode(policy: CNNActorCritic, env, device: torch.device) -> tuple[floa
     while True:
         # (H, W, C) → (1, C, H, W)
         obs_t = torch.from_numpy(obs).permute(2, 0, 1).unsqueeze(0).float().to(device)
-        action = policy.act(obs_t)
-        obs, reward, terminated, truncated, info = env.step(action)
+        with torch.no_grad():
+            action, _, _, _ = policy.get_action_and_value(obs_t)
+        obs, reward, terminated, truncated, info = env.step(action.item())
         total_reward += reward
         steps += 1
 

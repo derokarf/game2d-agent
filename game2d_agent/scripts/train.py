@@ -63,7 +63,7 @@ def make_single_env(rank: int, seed: int):
             frame_size=(84, 84),
             num_stack=4,
             reward_clip=None,
-            episodic_life=True,
+            episodic_life=False,
         )
         env.reset(seed=seed + rank)
         return env
@@ -192,10 +192,12 @@ class EpisodeTracker:
 
 def save_checkpoint(
     policy: CNNActorCritic,
+    optimizer,
     obs_shape: tuple,
     n_actions: int,
     iteration: int,
     global_step: int,
+    best_mean_reward: float,
     save_dir: str,
     tag: str = "",
 ) -> str:
@@ -204,11 +206,13 @@ def save_checkpoint(
     path = os.path.join(save_dir, name)
     torch.save(
         {
-            "policy_state_dict": policy.state_dict(),
-            "obs_shape":         obs_shape,
-            "n_actions":         n_actions,
-            "iteration":         iteration,
-            "total_timesteps":   global_step,
+            "policy_state_dict":    policy.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "obs_shape":            obs_shape,
+            "n_actions":            n_actions,
+            "iteration":            iteration,
+            "global_step":          global_step,
+            "best_mean_reward":     best_mean_reward,
         },
         path,
     )
@@ -274,6 +278,21 @@ def train(args: argparse.Namespace) -> None:
     total_params = sum(p.numel() for p in policy.parameters())
     print(f"Policy params    : {total_params:,}")
 
+    # ── Resume ───────────────────────────────────────────────────────────────
+    start_iteration  = 1
+    global_step      = 0
+    best_mean_reward = -np.inf
+
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        policy.load_state_dict(ckpt["policy_state_dict"])
+        ppo.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_iteration  = ckpt["iteration"] + 1
+        global_step      = ckpt["global_step"]
+        best_mean_reward = ckpt.get("best_mean_reward", -np.inf)
+        print(f"Resumed from     : {args.resume}")
+        print(f"Start iteration  : {start_iteration}  (step {global_step:,})")
+
     # ── Logging ──────────────────────────────────────────────────────────────
     run_name = f"ppo_{int(time.time())}"
     writer   = make_writer(os.path.join("logs", "ppo"), run_name) if args.track else None
@@ -295,11 +314,9 @@ def train(args: argparse.Namespace) -> None:
     )
     print("-" * 110)
 
-    global_step      = 0
-    t_start          = time.time()
-    best_mean_reward = -np.inf
+    t_start = time.time()
 
-    for iteration in range(1, total_iters + 1):
+    for iteration in range(start_iteration, total_iters + 1):
         t_iter = time.time()
 
         # ── Anneal LR ────────────────────────────────────────────────────────
@@ -348,27 +365,30 @@ def train(args: argparse.Namespace) -> None:
         if ep_stats["n_episodes"] > 0 and mean_rew > best_mean_reward:
             best_mean_reward = mean_rew
             path = save_checkpoint(
-                policy, obs_shape, n_actions, iteration, global_step, save_dir, tag="best"
+                policy, ppo.optimizer, obs_shape, n_actions,
+                iteration, global_step, best_mean_reward, save_dir, tag="best"
             )
             print(f"  [best] new best {best_mean_reward:.3f} → {path}")
 
         # ── Periodic checkpoint ───────────────────────────────────────────────
         if iteration % args.save_interval == 0:
             path = save_checkpoint(
-                policy, obs_shape, n_actions, iteration, global_step, save_dir
+                policy, ppo.optimizer, obs_shape, n_actions,
+                iteration, global_step, best_mean_reward, save_dir
             )
             print(f"  [ckpt] saved → {path}")
 
     # ── Final checkpoint ──────────────────────────────────────────────────────
     path = save_checkpoint(
-        policy, obs_shape, n_actions, total_iters, global_step, save_dir, tag="final"
+        policy, ppo.optimizer, obs_shape, n_actions,
+        total_iters, global_step, best_mean_reward, save_dir, tag="final"
     )
     print(f"\nTraining complete — {global_step:,} steps in {time.time() - t_start:.1f}s")
     print(f"Final checkpoint : {path}")
 
     if writer:
         writer.close()
-    envs.close()
+    os._exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +430,8 @@ if __name__ == "__main__":
                         help="Save checkpoint every N iterations")
     parser.add_argument("--save-dir",        type=str,   default=os.path.join("models", "ppo"),
                         help="Directory to save checkpoints")
+    parser.add_argument("--resume",          type=str,   default=None,
+                        help="Path to checkpoint to resume training from")
 
     args = parser.parse_args()
     train(args)
-    os._exit(0)

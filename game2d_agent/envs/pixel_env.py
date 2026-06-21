@@ -46,6 +46,7 @@ class PixelGameEnv(gymnasium.Env):
         )
 
         self.game_state = None
+        self._hit_wall = False
 
     def _init_pygame(self):
         if pygame.get_init() is False:
@@ -64,9 +65,11 @@ class PixelGameEnv(gymnasium.Env):
             "obstacles": self._spawn_obstacles(3),
             "score": 0,
             "lives": 3,
-            "prev_target_dist": None,
             "prev_obstacle_dist": None,
         }
+        x, y = self._safe_spawn()
+        self.game_state["player_x"] = x
+        self.game_state["player_y"] = y
 
     def _spawn_targets(self, count):
         return [
@@ -89,6 +92,22 @@ class PixelGameEnv(gymnasium.Env):
             for _ in range(count)
         ]
 
+    def _safe_spawn(self):
+        """Return a (x, y) position that doesn't overlap any obstacle."""
+        for _ in range(100):
+            x = np.random.randint(40, self.screen_width - 40)
+            y = np.random.randint(40, self.screen_height - 40)
+            safe = True
+            for obs in self.game_state["obstacles"]:
+                cx = np.clip(x, obs["x"], obs["x"] + obs["w"])
+                cy = np.clip(y, obs["y"], obs["y"] + obs["h"])
+                if np.sqrt((x - cx) ** 2 + (y - cy) ** 2) < 30:
+                    safe = False
+                    break
+            if safe:
+                return x, y
+        return self.screen_width // 2, self.screen_height // 2
+
     def _apply_action(self, action):
         state = self.game_state
         if action == 0:
@@ -102,8 +121,11 @@ class PixelGameEnv(gymnasium.Env):
         elif action == 4:
             state["player_y"] += state["player_speed"]
 
-        state["player_x"] = np.clip(state["player_x"], 0, self.screen_width)
-        state["player_y"] = np.clip(state["player_y"], 0, self.screen_height)
+        clipped_x = np.clip(state["player_x"], 0, self.screen_width)
+        clipped_y = np.clip(state["player_y"], 0, self.screen_height)
+        self._hit_wall = (clipped_x != state["player_x"]) or (clipped_y != state["player_y"])
+        state["player_x"] = clipped_x
+        state["player_y"] = clipped_y
 
     def _render_frame(self):
         self._init_pygame()
@@ -169,20 +191,14 @@ class PixelGameEnv(gymnasium.Env):
                 if not hit_obstacle:
                     reward -= 5.0
                     state["lives"] -= 1
-                    state["player_x"] = self.screen_width // 2
-                    state["player_y"] = self.screen_height // 2
+                    state["player_x"], state["player_y"] = self._safe_spawn()
                     hit_obstacle = True
 
-        # ── Progress shaping ──────────────────────────────────────────────────
-        # Reward getting closer to nearest target (k=0.01)
-        if state["prev_target_dist"] is not None and nearest_target_dist != float("inf"):
-            reward += 0.01 * (state["prev_target_dist"] - nearest_target_dist)
-
+        # ── Obstacle avoidance shaping ────────────────────────────────────────
         # Reward moving away from nearest obstacle (k=0.005)
         if state["prev_obstacle_dist"] is not None and nearest_obstacle_dist != float("inf"):
             reward += 0.005 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
 
-        state["prev_target_dist"] = nearest_target_dist if nearest_target_dist != float("inf") else None
         state["prev_obstacle_dist"] = nearest_obstacle_dist if nearest_obstacle_dist != float("inf") else None
 
         return reward
@@ -196,6 +212,7 @@ class PixelGameEnv(gymnasium.Env):
         self._init_pygame()
         self._init_game()
         self.current_step = 0
+        self._hit_wall = False
 
         obs = self._get_obs()
         info = {"game_state": self.game_state}
