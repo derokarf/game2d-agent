@@ -65,6 +65,7 @@ class PixelGameEnv(gymnasium.Env):
             "obstacles": self._spawn_obstacles(3),
             "score": 0,
             "lives": 3,
+            "prev_target_dist": None,
             "prev_obstacle_dist": None,
         }
         x, y = self._safe_spawn()
@@ -194,8 +195,16 @@ class PixelGameEnv(gymnasium.Env):
                     state["player_x"], state["player_y"] = self._safe_spawn()
                     hit_obstacle = True
 
-        # ── Obstacle avoidance shaping ────────────────────────────────────────
-        # Reward moving away from nearest obstacle (k=0.005)
+        # ── Shaping ───────────────────────────────────────────────────────────
+        # Tiny approach reward — 100x smaller than collection (+10), no hover incentive
+        if nearest_target_dist != float("inf"):
+            if "prev_target_dist" in state and state["prev_target_dist"] is not None:
+                reward += 0.001 * (state["prev_target_dist"] - nearest_target_dist)
+            state["prev_target_dist"] = nearest_target_dist
+        else:
+            state["prev_target_dist"] = None
+
+        # Obstacle avoidance shaping
         if state["prev_obstacle_dist"] is not None and nearest_obstacle_dist != float("inf"):
             reward += 0.005 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
 
