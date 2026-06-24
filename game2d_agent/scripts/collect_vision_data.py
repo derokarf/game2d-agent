@@ -1,5 +1,5 @@
 """
-Collect (frame, label) pairs by running a random agent.
+Collect (frame, label) pairs by running random agents in parallel.
 
 Each sample:
   frame : (84, 84, 3) uint8   — RGB render of the current game state
@@ -17,14 +17,17 @@ Label layout (18 values):
 
 Usage:
     python scripts/collect_vision_data.py
-    python scripts/collect_vision_data.py --episodes 500 --out data/vision/dataset.npz
+    python scripts/collect_vision_data.py --episodes 500 --workers 8
+    python scripts/collect_vision_data.py --episodes 200 --out data/vision/dataset.npz
 """
 
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -37,31 +40,29 @@ from envs.pixel_env import PixelGameEnv
 
 SCREEN_W = 640
 SCREEN_H = 480
-MAX_DIST = np.sqrt(SCREEN_W ** 2 + SCREEN_H ** 2)
+MAX_DIST  = float(np.sqrt(SCREEN_W ** 2 + SCREEN_H ** 2))
 
 
 def extract_label(state: dict) -> np.ndarray:
     """Convert game_state → flat float32 label vector of shape (18,)."""
     px, py = state["player_x"], state["player_y"]
 
-    label = [px / SCREEN_W, py / SCREEN_H]
-
-    # Sort targets by distance to player
-    def _dist(t):
+    def _d(t):
         return np.sqrt((t["x"] - px) ** 2 + (t["y"] - py) ** 2)
 
-    targets = sorted(state["targets"], key=_dist)
+    targets = sorted(state["targets"], key=_d)
+    label   = [px / SCREEN_W, py / SCREEN_H]
 
     for i in range(5):
         if i < len(targets):
-            dx = (targets[i]["x"] - px) / SCREEN_W
-            dy = (targets[i]["y"] - py) / SCREEN_H
-            d  = _dist(targets[i]) / MAX_DIST
+            label.extend([
+                (targets[i]["x"] - px) / SCREEN_W,
+                (targets[i]["y"] - py) / SCREEN_H,
+                _d(targets[i]) / MAX_DIST,
+            ])
         else:
-            dx, dy, d = 0.0, 0.0, 1.0
-        label.extend([dx, dy, d])
+            label.extend([0.0, 0.0, 1.0])
 
-    # Nearest obstacle distance
     min_obs = float("inf")
     for obs in state["obstacles"]:
         cx = np.clip(px, obs["x"], obs["x"] + obs["w"])
@@ -69,57 +70,82 @@ def extract_label(state: dict) -> np.ndarray:
         min_obs = min(min_obs, np.sqrt((px - cx) ** 2 + (py - cy) ** 2))
 
     label.append(min_obs / MAX_DIST if min_obs != float("inf") else 1.0)
-
     return np.array(label, dtype=np.float32)
 
 
-def collect(args: argparse.Namespace) -> None:
-    frames_list: list[np.ndarray] = []
-    labels_list: list[np.ndarray] = []
+# ---------------------------------------------------------------------------
+# Worker — runs in a subprocess
+# ---------------------------------------------------------------------------
 
-    env = PixelGameEnv(frame_size=(84, 84), render_mode="rgb_array", max_steps=args.max_steps)
+def _worker(task: tuple) -> tuple[np.ndarray, np.ndarray]:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
-    for ep in range(1, args.episodes + 1):
+    n_eps, max_steps, seed, wid = task
+    np.random.seed(seed)
+
+    frames: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+
+    env = PixelGameEnv(frame_size=(84, 84), render_mode="rgb_array", max_steps=max_steps)
+
+    for ep in range(1, n_eps + 1):
         env.reset()
-
         while True:
-            frame = env.render()                        # (84, 84, 3) uint8
-            label = extract_label(env.game_state)       # (18,) float32
-            frames_list.append(frame)
-            labels_list.append(label)
-
-            action = env.action_space.sample()
-            _, _, terminated, truncated, _ = env.step(action)
+            frames.append(env.render())
+            labels.append(extract_label(env.game_state))
+            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
             if terminated or truncated:
                 break
 
-        if ep % 50 == 0 or ep == args.episodes:
-            print(f"  ep {ep:>4}/{args.episodes}  |  frames collected: {len(frames_list):,}")
+        if ep % 10 == 0:
+            print(f"  [worker {wid}] ep {ep:>4}/{n_eps}  |  frames: {len(frames):>6,}", flush=True)
 
     env.close()
+    print(f"  [worker {wid}] done  —  {len(frames):,} frames", flush=True)
+    return np.stack(frames), np.stack(labels)
 
-    frames_arr = np.stack(frames_list)   # (N, 84, 84, 3)
-    labels_arr = np.stack(labels_list)   # (N, 18)
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def collect(args: argparse.Namespace) -> None:
+    n_workers = min(args.workers, mp.cpu_count(), args.episodes)
+    base, rem  = divmod(args.episodes, n_workers)
+    eps_per    = [base + (1 if i < rem else 0) for i in range(n_workers)]
+
+    print(f"Episodes    : {args.episodes}")
+    print(f"Workers     : {n_workers}  (episodes per worker: {eps_per})")
+    print(f"Max steps   : {args.max_steps}")
+    print()
+
+    tasks = [(n, args.max_steps, i * 7919, i) for i, n in enumerate(eps_per)]
+
+    t0 = time.time()
+    with mp.Pool(n_workers) as pool:
+        results = list(pool.imap_unordered(_worker, tasks))
+
+    all_frames = np.concatenate([r[0] for r in results])
+    all_labels = np.concatenate([r[1] for r in results])
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    np.savez_compressed(args.out, frames=frames_arr, labels=labels_arr)
+    np.savez_compressed(args.out, frames=all_frames, labels=all_labels)
 
-    print(f"\nDataset saved → {args.out}")
-    print(f"  frames : {frames_arr.shape}  dtype={frames_arr.dtype}")
-    print(f"  labels : {labels_arr.shape}  dtype={labels_arr.dtype}")
+    elapsed = time.time() - t0
     size_mb = os.path.getsize(args.out) / 1024 / 1024
-    print(f"  file size: {size_mb:.1f} MB")
+
+    print(f"\nTotal frames  : {len(all_frames):,}")
+    print(f"Dataset saved → {args.out}  ({size_mb:.1f} MB)")
+    print(f"Time elapsed  : {elapsed:.1f}s  ({len(all_frames)/elapsed:.0f} frames/s)")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect vision pre-training data")
-    parser.add_argument("--episodes",  type=int, default=200,
-                        help="Number of random episodes to run (default: 200)")
-    parser.add_argument("--max-steps", type=int, default=1000,
-                        help="Max steps per episode (default: 1000)")
-    parser.add_argument("--out",       default="data/vision/dataset.npz",
-                        help="Output path for the .npz dataset")
+    parser.add_argument("--episodes",  type=int, default=200)
+    parser.add_argument("--max-steps", type=int, default=1000)
+    parser.add_argument("--workers",   type=int, default=min(4, mp.cpu_count()),
+                        help=f"Parallel workers (default: min(4, cpu_count)={min(4, mp.cpu_count())})")
+    parser.add_argument("--out",       default="data/vision/dataset.npz")
     args = parser.parse_args()
-
-    print(f"Collecting {args.episodes} episodes × up to {args.max_steps} steps ...")
     collect(args)
