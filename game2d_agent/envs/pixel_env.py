@@ -61,26 +61,37 @@ class PixelGameEnv(gymnasium.Env):
             "player_x": self.screen_width // 2,
             "player_y": self.screen_height // 2,
             "player_speed": 8,
-            "targets": self._spawn_targets(5),
+            "targets": [],
             "obstacles": self._spawn_obstacles(3),
             "score": 0,
             "lives": 3,
             "prev_target_dist": None,
             "prev_obstacle_dist": None,
         }
+        self.game_state["targets"] = self._spawn_targets(5)
         x, y = self._safe_spawn()
         self.game_state["player_x"] = x
         self.game_state["player_y"] = y
 
     def _spawn_targets(self, count):
-        return [
-            {
-                "x": np.random.randint(30, self.screen_width - 30),
-                "y": np.random.randint(30, self.screen_height - 30),
-                "radius": 25,
-            }
-            for _ in range(count)
-        ]
+        targets = []
+        for _ in range(count):
+            for _ in range(100):
+                x = np.random.randint(30, self.screen_width - 30)
+                y = np.random.randint(30, self.screen_height - 30)
+                safe = True
+                for obs in self.game_state["obstacles"]:
+                    cx = np.clip(x, obs["x"], obs["x"] + obs["w"])
+                    cy = np.clip(y, obs["y"], obs["y"] + obs["h"])
+                    if np.sqrt((x - cx) ** 2 + (y - cy) ** 2) < 35:
+                        safe = False
+                        break
+                if safe:
+                    targets.append({"x": x, "y": y, "radius": 25})
+                    break
+            else:
+                targets.append({"x": x, "y": y, "radius": 25})
+        return targets
 
     def _spawn_obstacles(self, count):
         return [
@@ -196,10 +207,13 @@ class PixelGameEnv(gymnasium.Env):
                     hit_obstacle = True
 
         # ── Shaping ───────────────────────────────────────────────────────────
-        # Tiny approach reward — 100x smaller than collection (+10), no hover incentive
-        if nearest_target_dist != float("inf"):
-            if "prev_target_dist" in state and state["prev_target_dist"] is not None:
-                reward += 0.001 * (state["prev_target_dist"] - nearest_target_dist)
+        # Approach reward k=0.01. Reset prev on collection so the jump to the
+        # next target doesn't produce a negative penalty (which taught hovering).
+        if collected:
+            state["prev_target_dist"] = None
+        elif nearest_target_dist != float("inf"):
+            if state["prev_target_dist"] is not None:
+                reward += 0.01 * (state["prev_target_dist"] - nearest_target_dist)
             state["prev_target_dist"] = nearest_target_dist
         else:
             state["prev_target_dist"] = None
