@@ -43,9 +43,9 @@ def train(args: argparse.Namespace) -> None:
     train_ds, val_ds = random_split(TensorDataset(X, Y), [n_train, n_val])
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=2, pin_memory=device.type == "cuda")
+                              num_workers=args.workers, pin_memory=device.type == "cuda")
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              num_workers=2, pin_memory=device.type == "cuda")
+                              num_workers=args.workers, pin_memory=device.type == "cuda")
 
     print(f"Train / val : {n_train:,} / {n_val:,}")
     print(f"Label dim   : {SCENE_DIM}")
@@ -112,5 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr",         type=float, default=1e-3)
     parser.add_argument("--embed-dim",  type=int,   default=64,
                         help="CNN embedding size (default: 64)")
+    parser.add_argument("--workers",    type=int,   default=4,
+                        help="DataLoader worker processes for data loading (default: 4)")
     args = parser.parse_args()
     train(args)
