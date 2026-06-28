@@ -51,7 +51,7 @@ def load_policy(checkpoint_path: str, encoder_path: str, device: torch.device):
     return encoder, policy
 
 
-def run_episode(encoder, policy, env, device, deterministic=False):
+def run_episode(encoder, policy, env, device, deterministic=False, temperature=1.0):
     obs_raw, _ = env.reset()
     total_reward = 0.0
     steps = 0
@@ -67,6 +67,9 @@ def run_episode(encoder, policy, env, device, deterministic=False):
             obs_enc = encoder(t)                              # (1, 64)
             if deterministic:
                 action = torch.tensor([policy.act(obs_enc)])  # argmax — no sampling
+            elif temperature != 1.0:
+                logits, _ = policy.forward(obs_enc)
+                action = torch.distributions.Categorical(logits=logits / temperature).sample()
             else:
                 action, _, _, _ = policy.get_action_and_value(obs_enc)
 
@@ -98,11 +101,18 @@ def play(args):
     all_frames = []
     results = []
 
-    mode = "deterministic" if args.deterministic else "stochastic"
+    if args.deterministic:
+        mode = "deterministic"
+    elif args.temperature != 1.0:
+        mode = f"temperature={args.temperature}"
+    else:
+        mode = "stochastic"
     print(f"Rendering {args.episodes} episode(s) ...  [{mode}]\n")
     for ep in range(1, args.episodes + 1):
         env = PixelGameEnv(frame_size=(84, 84), render_mode="rgb_array", max_steps=args.max_steps)
-        reward, steps, score, frames = run_episode(encoder, policy, env, device, args.deterministic)
+        reward, steps, score, frames = run_episode(
+            encoder, policy, env, device, args.deterministic, args.temperature
+        )
         env.close()
 
         all_frames.extend(frames)
@@ -129,5 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--live",          action="store_true")
     parser.add_argument("--deterministic", action="store_true",
                         help="Pick highest-confidence action every step (no sampling)")
+    parser.add_argument("--temperature",   type=float, default=1.0,
+                        help="Sampling temperature: <1 more decisive, >1 more random (default 1.0)")
     args = parser.parse_args()
     play(args)
