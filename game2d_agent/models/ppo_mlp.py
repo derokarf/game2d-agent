@@ -307,7 +307,8 @@ class VectorPPO:
             return
         frac = 1.0 - current_step / total_steps
         for pg in self.optimizer.param_groups:
-            pg["lr"] = frac * self.config.learning_rate
+            base_lr = pg.get("initial_lr", self.config.learning_rate)
+            pg["lr"] = frac * base_lr
 
     # ------------------------------------------------------------------
     # Helper
