@@ -24,6 +24,8 @@ class PixelGameEnv(gymnasium.Env):
         frame_size: tuple = (84, 84),
         render_mode: Optional[str] = None,
         max_steps: int = 5000,
+        n_obstacles: int = 3,
+        n_targets: int = 5,
     ):
         super().__init__()
 
@@ -31,6 +33,8 @@ class PixelGameEnv(gymnasium.Env):
         self.render_mode = render_mode
         self.max_steps = max_steps
         self.current_step = 0
+        self.n_obstacles = n_obstacles
+        self.n_targets = n_targets
 
         self.screen_width = 640
         self.screen_height = 480
@@ -62,13 +66,12 @@ class PixelGameEnv(gymnasium.Env):
             "player_y": self.screen_height // 2,
             "player_speed": 8,
             "targets": [],
-            "obstacles": self._spawn_obstacles(3),
+            "obstacles": self._spawn_obstacles(self.n_obstacles),
             "score": 0,
             "lives": 3,
             "prev_target_dist": None,
-            "prev_obstacle_dist": None,
         }
-        self.game_state["targets"] = self._spawn_targets(5)
+        self.game_state["targets"] = self._spawn_targets(self.n_targets)
         x, y = self._safe_spawn()
         self.game_state["player_x"] = x
         self.game_state["player_y"] = y
@@ -184,7 +187,7 @@ class PixelGameEnv(gymnasium.Env):
             state["targets"].pop(idx)
 
         if len(state["targets"]) == 0:
-            state["targets"] = self._spawn_targets(5)
+            state["targets"] = self._spawn_targets(self.n_targets)
             state["score"] += 1
             reward += 50.0
             nearest_target_dist = float("inf")  # recalc after respawn
@@ -201,7 +204,7 @@ class PixelGameEnv(gymnasium.Env):
 
             if dist == 0:  # player is inside the obstacle
                 if not hit_obstacle:
-                    reward -= 5.0
+                    reward -= 20.0
                     state["lives"] -= 1
                     state["player_x"], state["player_y"] = self._safe_spawn()
                     hit_obstacle = True
@@ -217,12 +220,6 @@ class PixelGameEnv(gymnasium.Env):
             state["prev_target_dist"] = nearest_target_dist
         else:
             state["prev_target_dist"] = None
-
-        # Obstacle avoidance shaping
-        if state["prev_obstacle_dist"] is not None and nearest_obstacle_dist != float("inf"):
-            reward += 0.005 * (nearest_obstacle_dist - state["prev_obstacle_dist"])
-
-        state["prev_obstacle_dist"] = nearest_obstacle_dist if nearest_obstacle_dist != float("inf") else None
 
         return reward
 

@@ -1,6 +1,10 @@
 """
 Train VisionEncoder to predict game state labels from raw RGB frames.
 
+Uses three typed prediction heads with equal-weight losses so each object
+type (player, targets, obstacles) gets equal training signal regardless of
+how many values it has.
+
 Usage:
     python scripts/train_vision.py
     python scripts/train_vision.py --data data/vision/dataset.npz --epochs 30
@@ -20,7 +24,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
-from models.vision_encoder import VisionNet, SCENE_DIM
+from models.vision_encoder import (
+    VisionNet, SCENE_DIM,
+    PLAYER_LABELS, TARGET_LABELS, OBSTACLE_LABELS,
+)
 
 
 def train(args: argparse.Namespace) -> None:
@@ -28,11 +35,14 @@ def train(args: argparse.Namespace) -> None:
     print(f"Device      : {device}")
 
     # ── Load dataset ──────────────────────────────────────────────────────────
-    data = np.load(args.data)
+    data   = np.load(args.data)
     frames = data["frames"]   # (N, 84, 84, 3) uint8
-    labels = data["labels"]   # (N, 18) float32
+    labels = data["labels"]   # (N, 26) float32
     N = len(frames)
     print(f"Dataset     : {N:,} samples")
+    print(f"Label dim   : {labels.shape[1]}  (expected {SCENE_DIM})")
+    assert labels.shape[1] == SCENE_DIM, \
+        f"Dataset has {labels.shape[1]}-dim labels but SCENE_DIM={SCENE_DIM}. Re-collect the dataset."
 
     # (N, 84, 84, 3) uint8 → (N, 3, 84, 84) float32 [0,1]
     X = torch.from_numpy(frames).permute(0, 3, 1, 2).float().div(255.0)
@@ -48,7 +58,6 @@ def train(args: argparse.Namespace) -> None:
                               num_workers=args.workers, pin_memory=device.type == "cuda")
 
     print(f"Train / val : {n_train:,} / {n_val:,}")
-    print(f"Label dim   : {SCENE_DIM}")
     print()
 
     # ── Model ─────────────────────────────────────────────────────────────────
@@ -66,7 +75,13 @@ def train(args: argparse.Namespace) -> None:
         train_loss = 0.0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
-            loss = criterion(model(xb), yb)
+            pred = model(xb)
+            # Equal weight per head so each object type trains equally
+            loss = (
+                criterion(pred[:, PLAYER_LABELS],   yb[:, PLAYER_LABELS])
+                + criterion(pred[:, TARGET_LABELS],   yb[:, TARGET_LABELS])
+                + criterion(pred[:, OBSTACLE_LABELS], yb[:, OBSTACLE_LABELS])
+            )
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -74,12 +89,20 @@ def train(args: argparse.Namespace) -> None:
         train_loss /= n_train
 
         model.eval()
-        val_loss = 0.0
+        val_loss = val_player = val_target = val_obstacle = 0.0
         with torch.no_grad():
             for xb, yb in val_loader:
                 xb, yb = xb.to(device), yb.to(device)
-                val_loss += criterion(model(xb), yb).item() * len(xb)
-        val_loss /= n_val
+                pred = model(xb)
+                n = len(xb)
+                val_player   += criterion(pred[:, PLAYER_LABELS],   yb[:, PLAYER_LABELS]).item()   * n
+                val_target   += criterion(pred[:, TARGET_LABELS],   yb[:, TARGET_LABELS]).item()   * n
+                val_obstacle += criterion(pred[:, OBSTACLE_LABELS], yb[:, OBSTACLE_LABELS]).item() * n
+                val_loss     += (val_player + val_target + val_obstacle)
+        val_player   /= n_val
+        val_target   /= n_val
+        val_obstacle /= n_val
+        val_loss      = val_player + val_target + val_obstacle
 
         scheduler.step(val_loss)
         lr_now = optimizer.param_groups[0]["lr"]
@@ -96,6 +119,7 @@ def train(args: argparse.Namespace) -> None:
         print(f"epoch {epoch:>3}/{args.epochs}"
               f"  train {train_loss:.5f}"
               f"  val {val_loss:.5f}"
+              f"  (player {val_player:.5f}  target {val_target:.5f}  obstacle {val_obstacle:.5f})"
               f"  lr {lr_now:.2e}"
               f"{saved}")
 
@@ -110,9 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs",     type=int,   default=30)
     parser.add_argument("--batch-size", type=int,   default=256)
     parser.add_argument("--lr",         type=float, default=1e-3)
-    parser.add_argument("--embed-dim",  type=int,   default=64,
-                        help="CNN embedding size (default: 64)")
-    parser.add_argument("--workers",    type=int,   default=4,
-                        help="DataLoader worker processes for data loading (default: 4)")
+    parser.add_argument("--embed-dim",  type=int,   default=64)
+    parser.add_argument("--workers",    type=int,   default=4)
     args = parser.parse_args()
     train(args)

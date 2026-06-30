@@ -117,14 +117,15 @@ def train(args: argparse.Namespace) -> None:
                     f"{'ent':>8} | {'kl':>10} | {'ev':>6} | {'lr':>10}\n")
 
     # ── Environments ─────────────────────────────────────────────────────────
+    env_kwargs = dict(max_steps=1000, n_obstacles=args.n_obstacles, n_targets=args.n_targets)
     envs = SyncVectorEnv([
-        lambda: StateGameEnv(max_steps=1000)
+        (lambda kw: lambda: StateGameEnv(**kw))(env_kwargs)
         for _ in range(args.num_envs)
     ])
 
     eval_seeds = list(range(1000, 1000 + args.n_eval))
     eval_envs  = SyncVectorEnv([
-        lambda: StateGameEnv(max_steps=1000)
+        (lambda kw: lambda: StateGameEnv(**kw))(env_kwargs)
         for _ in range(args.n_eval)
     ])
 
@@ -135,6 +136,11 @@ def train(args: argparse.Namespace) -> None:
         n_actions = n_actions,
         hidden    = (256, 128),
     ).to(device)
+
+    if args.load_checkpoint:
+        ckpt = torch.load(args.load_checkpoint, map_location=device, weights_only=False)
+        policy.load_state_dict(ckpt["policy_state_dict"])
+        _log(f"Loaded policy  : {args.load_checkpoint}", args.log_file)
 
     config = PPOConfig(
         n_steps        = args.n_steps,
@@ -159,6 +165,7 @@ def train(args: argparse.Namespace) -> None:
 
     _log(f"Device        : {device}", args.log_file)
     _log(f"Obs dim       : {OBS_DIM}  (true game state, no CNN)", args.log_file)
+    _log(f"Curriculum    : {args.n_obstacles} obstacle(s), {args.n_targets} target(s)", args.log_file)
     _log(f"Environments  : {args.num_envs}", args.log_file)
     _log(f"Steps/iter    : {steps_per_iter:,}", args.log_file)
     _log(f"Total iters   : {total_iters:,}", args.log_file)
@@ -291,5 +298,11 @@ if __name__ == "__main__":
     parser.add_argument("--log-file",        default="logs/train_state_run1.log")
     parser.add_argument("--eval-interval",   type=int,   default=20)
     parser.add_argument("--n-eval",          type=int,   default=16)
+    parser.add_argument("--n-obstacles",     type=int,   default=3,
+                        help="Number of obstacles in the game (curriculum: start low)")
+    parser.add_argument("--n-targets",       type=int,   default=5,
+                        help="Number of targets in the game (curriculum: start low)")
+    parser.add_argument("--load-checkpoint", type=str,   default=None,
+                        help="Load policy weights from this checkpoint before training")
     args = parser.parse_args()
     train(args)

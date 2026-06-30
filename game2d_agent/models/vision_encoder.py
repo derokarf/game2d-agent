@@ -3,25 +3,34 @@ VisionEncoder — CNN that maps a raw RGB game frame to a compact scene embeddin
 
 Two classes:
 
-  VisionEncoder   — the CNN backbone only (used during PPO training, frozen)
-  VisionNet       — encoder + linear prediction head (used during pre-training)
+  VisionEncoder   — the CNN backbone only (used during PPO training)
+  VisionNet       — encoder + typed prediction heads (used during pre-training)
 
 Pre-training flow:
-    frame (84×84×3) → VisionEncoder → 64-dim embedding → linear head → 18 predicted labels
-    loss = MSE(predicted, true_labels_from_game_state)
+    frame (84×84×3) → VisionEncoder → 64-dim embedding (partitioned by type)
+                                            ↓           ↓            ↓
+                                      player_head  target_head  obstacle_head
+                                        2 values    15 values     9 values
 
 PPO training flow:
-    frame (84×84×3) → VisionEncoder (frozen) → 64-dim embedding → MLP policy → actions
+    frame (84×84×3) → VisionEncoder → 64-dim embedding → MLP policy → actions
 
-Label layout (SCENE_DIM = 18):
-    [0]     player_x   / screen_w
-    [1]     player_y   / screen_h
-    [2..4]  nearest target:  dx, dy, dist  (all normalized)
-    [5..7]  2nd target:      dx, dy, dist
-    [8..10] 3rd target:      dx, dy, dist
-    [11..13] 4th target:     dx, dy, dist
-    [14..16] 5th target:     dx, dy, dist
-    [17]    nearest obstacle dist / max_dist
+Embedding partition (64 dims total):
+    [0:8]   → player_head   → player_x, player_y
+    [8:28]  → target_head   → 5 targets × (dx, dy, dist)
+    [28:40] → obstacle_head → 3 obstacles × (dx, dy, dist)
+    [40:64] → free context  → 24 dims for MLP policy use
+
+Label layout (SCENE_DIM = 26):
+    [0]      player_x / screen_w
+    [1]      player_y / screen_h
+    [2..4]   nearest target:  dx/W, dy/H, dist/max_dist
+    [5..7]   2nd target:      dx, dy, dist
+    ...
+    [14..16] 5th target:      dx, dy, dist
+    [17..19] nearest obstacle: dx_to_center/W, dy_to_center/H, edge_dist/max_dist
+    [20..22] 2nd obstacle:    dx, dy, edge_dist
+    [23..25] 3rd obstacle:    dx, dy, edge_dist
 """
 
 from __future__ import annotations
@@ -30,7 +39,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-SCENE_DIM = 18   # length of the label vector
+SCENE_DIM = 26   # length of the label vector
+
+# Embedding slices — which dims the CNN allocates to each object type
+PLAYER_EMBED   = slice(0, 8)    # 8 dims  → player position
+TARGET_EMBED   = slice(8, 28)   # 20 dims → 5 targets
+OBSTACLE_EMBED = slice(28, 40)  # 12 dims → 3 obstacles
+# slice(40, 64): 24 free dims used by MLP policy
+
+# Label slices — which values in SCENE_DIM each head predicts
+PLAYER_LABELS   = slice(0, 2)
+TARGET_LABELS   = slice(2, 17)
+OBSTACLE_LABELS = slice(17, 26)
 
 
 def _init(layer: nn.Module, gain: float = np.sqrt(2)) -> nn.Module:
@@ -43,8 +63,10 @@ class VisionEncoder(nn.Module):
     """
     CNN backbone: (B, 3, 84, 84) float32 [0,1]  →  (B, embed_dim).
 
-    Same conv architecture as the PPO policy CNN so the learned features
-    are compatible if we ever want to fine-tune end-to-end.
+    The 64-dim output is partitioned by type (see module docstring).
+    The CNN learns to put player features in dims 0-7, target features
+    in dims 8-27, obstacle features in dims 28-39, and uses dims 40-63
+    freely for context the MLP policy can exploit.
     """
 
     def __init__(self, in_channels: int = 3, embed_dim: int = 64):
@@ -78,13 +100,11 @@ class VisionEncoder(nn.Module):
         return self.net(x)
 
     def freeze(self) -> None:
-        """Call before PPO training to stop gradients flowing into the encoder."""
         for p in self.parameters():
             p.requires_grad = False
 
     @classmethod
     def load(cls, path: str, device: torch.device | str = "cpu") -> "VisionEncoder":
-        """Load a pre-trained encoder from a checkpoint file."""
         ckpt = torch.load(path, map_location=device, weights_only=False)
         encoder = cls(embed_dim=ckpt["embed_dim"])
         encoder.load_state_dict(ckpt["encoder_state_dict"])
@@ -93,15 +113,30 @@ class VisionEncoder(nn.Module):
 
 class VisionNet(nn.Module):
     """
-    Encoder + linear prediction head — used ONLY during supervised pre-training.
-    After training, only the encoder weights are saved and used downstream.
+    Encoder + typed prediction heads — used ONLY during supervised pre-training.
+
+    Three separate heads each read from their own slice of the embedding:
+      player_head   : embed[0:8]   → 2 values  (player_x, player_y)
+      target_head   : embed[8:28]  → 15 values (5 targets × dx,dy,dist)
+      obstacle_head : embed[28:40] → 9 values  (3 obstacles × dx,dy,dist)
+
+    This forces the CNN to place type-specific information in specific
+    embedding dimensions, giving the MLP a structured input.
+
+    After training, only encoder weights are saved and used downstream.
     """
 
-    def __init__(self, in_channels: int = 3, embed_dim: int = 64, out_dim: int = SCENE_DIM):
+    def __init__(self, in_channels: int = 3, embed_dim: int = 64):
         super().__init__()
-        self.encoder = VisionEncoder(in_channels, embed_dim)
-        self.head = _init(nn.Linear(embed_dim, out_dim), gain=1.0)
+        self.encoder       = VisionEncoder(in_channels, embed_dim)
+        self.player_head   = _init(nn.Linear(8,  2),  gain=1.0)
+        self.target_head   = _init(nn.Linear(20, 15), gain=1.0)
+        self.obstacle_head = _init(nn.Linear(12, 9),  gain=1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: (B, 3, 84, 84) float32  →  (B, SCENE_DIM) predicted labels"""
-        return self.head(self.encoder(x))
+        emb = self.encoder(x)
+        player_pred   = self.player_head(emb[:, PLAYER_EMBED])
+        target_pred   = self.target_head(emb[:, TARGET_EMBED])
+        obstacle_pred = self.obstacle_head(emb[:, OBSTACLE_EMBED])
+        return torch.cat([player_pred, target_pred, obstacle_pred], dim=1)

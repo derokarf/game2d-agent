@@ -227,11 +227,12 @@ def train(args: argparse.Namespace) -> None:
     os.makedirs(args.save_dir, exist_ok=True)
     if args.log_file:
         os.makedirs(os.path.dirname(os.path.abspath(args.log_file)), exist_ok=True)
-        # Write header
-        with open(args.log_file, "w") as f:
-            f.write(f"  {'iter':>5} | {'steps':>10} | {'sps':>6} | {'ep_rew':>7} | "
-                    f"{'ep_len':>6} | {'n_eps':>5} | {'pol':>8} | {'val':>8} | "
-                    f"{'ent':>8} | {'kl':>10} | {'ev':>6} | {'lr':>10}\n")
+        mode = "a" if args.resume else "w"
+        with open(args.log_file, mode) as f:
+            if not args.resume:
+                f.write(f"  {'iter':>5} | {'steps':>10} | {'sps':>6} | {'ep_rew':>7} | "
+                        f"{'ep_len':>6} | {'n_eps':>5} | {'pol':>8} | {'val':>8} | "
+                        f"{'ent':>8} | {'kl':>10} | {'ev':>6} | {'lr':>10}\n")
 
     # ── Encoder ──────────────────────────────────────────────────────────────
     encoder = VisionEncoder.load(args.encoder, device=device)
@@ -297,6 +298,15 @@ def train(args: argparse.Namespace) -> None:
     steps_per_iter = args.n_steps * args.num_envs
     total_iters    = args.total_timesteps // steps_per_iter
 
+    # ── Resume ───────────────────────────────────────────────────────────────
+    start_iter = 1
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        policy.load_state_dict(ckpt["policy_state_dict"])
+        ppo.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if finetune and "encoder_state_dict" in ckpt:
+            encoder.load_state_dict(ckpt["encoder_state_dict"])
+
     _log(f"Device        : {device}", args.log_file)
     _log(f"Environments  : {args.num_envs}", args.log_file)
     _log(f"Steps/iter    : {steps_per_iter:,}", args.log_file)
@@ -319,6 +329,12 @@ def train(args: argparse.Namespace) -> None:
     global_step      = 0
     t_start          = time.time()
 
+    if args.resume:
+        global_step      = ckpt["global_step"]
+        start_iter       = ckpt["iteration"] + 1
+        best_mean_reward = ckpt.get("best_mean_reward", -np.inf)
+        _log(f"Resumed        : {args.resume}  (iter {ckpt['iteration']}, step {global_step:,})", args.log_file)
+
     # Raw frame buffer for fine-tuning (stores uint8 pixels for re-encoding with grad)
     if finetune:
         raw_frames_buf = np.zeros(
@@ -326,7 +342,7 @@ def train(args: argparse.Namespace) -> None:
         )
 
     # ── Main loop ────────────────────────────────────────────────────────────
-    for iteration in range(1, total_iters + 1):
+    for iteration in range(start_iter, total_iters + 1):
         ppo.anneal_lr(iteration - 1, total_iters)
         ppo.buffer.reset()
 
@@ -466,5 +482,7 @@ if __name__ == "__main__":
                         help="Run fixed-seed eval every N iters (default: 20)")
     parser.add_argument("--n-eval",            type=int,   default=8,
                         help="Number of fixed-seed eval episodes per eval run (default: 8)")
+    parser.add_argument("--resume",            type=str,   default=None,
+                        help="Resume training from this checkpoint (policy, optimizer, step restored)")
     args = parser.parse_args()
     train(args)

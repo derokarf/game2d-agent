@@ -3,17 +3,22 @@ Collect (frame, label) pairs by running random agents in parallel.
 
 Each sample:
   frame : (84, 84, 3) uint8   — RGB render of the current game state
-  label : (18,) float32       — normalized scene description
+  label : (26,) float32       — normalized scene description
 
-Label layout (18 values):
-  [0]     player_x   / screen_w
-  [1]     player_y   / screen_h
-  [2..4]  nearest target:  dx/screen_w, dy/screen_h, dist/max_dist
-  [5..7]  2nd target:      dx, dy, dist
-  [8..10] 3rd target:      dx, dy, dist
-  [11..13] 4th target:     dx, dy, dist
-  [14..16] 5th target:     dx, dy, dist
-  [17]    nearest obstacle distance / max_dist
+Label layout (26 values) — matches state_env.py exactly:
+  [0]      player_x / screen_w
+  [1]      player_y / screen_h
+  [2..4]   nearest target:  dx/W, dy/H, dist/max_dist
+  [5..7]   2nd target:      dx, dy, dist
+  [8..10]  3rd target:      dx, dy, dist
+  [11..13] 4th target:      dx, dy, dist
+  [14..16] 5th target:      dx, dy, dist
+  [17..19] nearest obstacle: dx_to_center/W, dy_to_center/H, edge_dist/max_dist
+  [20..22] 2nd obstacle:     dx, dy, edge_dist
+  [23..25] 3rd obstacle:     dx, dy, edge_dist
+
+Targets and obstacles are sorted by distance (nearest first) so ordering
+is consistent across frames regardless of spawn order.
 
 Usage:
     python scripts/collect_vision_data.py
@@ -41,35 +46,51 @@ from envs.pixel_env import PixelGameEnv
 SCREEN_W = 640
 SCREEN_H = 480
 MAX_DIST  = float(np.sqrt(SCREEN_W ** 2 + SCREEN_H ** 2))
+LABEL_DIM = 26
 
 
 def extract_label(state: dict) -> np.ndarray:
-    """Convert game_state → flat float32 label vector of shape (18,)."""
-    px, py = state["player_x"], state["player_y"]
+    """Convert game_state → flat float32 label vector of shape (26,)."""
+    px, py = float(state["player_x"]), float(state["player_y"])
 
-    def _d(t):
+    label = [px / SCREEN_W, py / SCREEN_H]
+
+    # Targets sorted by distance (nearest first)
+    def _tdist(t):
         return np.sqrt((t["x"] - px) ** 2 + (t["y"] - py) ** 2)
 
-    targets = sorted(state["targets"], key=_d)
-    label   = [px / SCREEN_W, py / SCREEN_H]
-
+    targets = sorted(state["targets"], key=_tdist)
     for i in range(5):
         if i < len(targets):
-            label.extend([
-                (targets[i]["x"] - px) / SCREEN_W,
-                (targets[i]["y"] - py) / SCREEN_H,
-                _d(targets[i]) / MAX_DIST,
-            ])
+            t    = targets[i]
+            dx   = (t["x"] - px) / SCREEN_W
+            dy   = (t["y"] - py) / SCREEN_H
+            dist = _tdist(t) / MAX_DIST
         else:
-            label.extend([0.0, 0.0, 1.0])
+            dx = dy = dist = 0.0
+        label.extend([dx, dy, dist])
 
-    min_obs = float("inf")
-    for obs in state["obstacles"]:
-        cx = np.clip(px, obs["x"], obs["x"] + obs["w"])
-        cy = np.clip(py, obs["y"], obs["y"] + obs["h"])
-        min_obs = min(min_obs, np.sqrt((px - cx) ** 2 + (py - cy) ** 2))
+    # Obstacles sorted by nearest-edge distance (nearest first)
+    def _odist(ob):
+        cx = np.clip(px, ob["x"], ob["x"] + ob["w"])
+        cy = np.clip(py, ob["y"], ob["y"] + ob["h"])
+        return np.sqrt((px - cx) ** 2 + (py - cy) ** 2)
 
-    label.append(min_obs / MAX_DIST if min_obs != float("inf") else 1.0)
+    obstacles = sorted(state["obstacles"], key=_odist)
+    for i in range(3):
+        if i < len(obstacles):
+            ob        = obstacles[i]
+            cx_center = ob["x"] + ob["w"] / 2.0
+            cy_center = ob["y"] + ob["h"] / 2.0
+            dx        = (cx_center - px) / SCREEN_W
+            dy        = (cy_center - py) / SCREEN_H
+            cx_edge   = np.clip(px, ob["x"], ob["x"] + ob["w"])
+            cy_edge   = np.clip(py, ob["y"], ob["y"] + ob["h"])
+            dist      = np.sqrt((px - cx_edge) ** 2 + (py - cy_edge) ** 2) / MAX_DIST
+        else:
+            dx = dy = dist = 0.0
+        label.extend([dx, dy, dist])
+
     return np.array(label, dtype=np.float32)
 
 
@@ -118,6 +139,7 @@ def collect(args: argparse.Namespace) -> None:
     print(f"Episodes    : {args.episodes}")
     print(f"Workers     : {n_workers}  (episodes per worker: {eps_per})")
     print(f"Max steps   : {args.max_steps}")
+    print(f"Label dim   : {LABEL_DIM}")
     print()
 
     tasks = [(n, args.max_steps, i * 7919, i) for i, n in enumerate(eps_per)]
