@@ -38,8 +38,9 @@ class StateGameEnv(PixelGameEnv):
     Everything else — reward, actions, done conditions — is identical.
     """
 
-    def __init__(self, max_steps: int = 1000, n_obstacles: int = 3, n_targets: int = 5):
-        super().__init__(frame_size=(84, 84), render_mode=None, max_steps=max_steps,
+    def __init__(self, max_steps: int = 1000, n_obstacles: int = 3, n_targets: int = 5,
+                 render_mode: str | None = None):
+        super().__init__(frame_size=(84, 84), render_mode=render_mode, max_steps=max_steps,
                          n_obstacles=n_obstacles, n_targets=n_targets)
         self.observation_space = spaces.Box(
             low=-2.0, high=2.0, shape=(OBS_DIM,), dtype=np.float32
