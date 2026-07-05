@@ -210,13 +210,13 @@ class PixelGameEnv(gymnasium.Env):
                     hit_obstacle = True
 
         # ── Shaping ───────────────────────────────────────────────────────────
-        # Approach reward k=0.01. Reset prev on collection so the jump to the
+        # Approach reward k=0.05. Reset prev on collection so the jump to the
         # next target doesn't produce a negative penalty (which taught hovering).
         if collected:
             state["prev_target_dist"] = None
         elif nearest_target_dist != float("inf"):
             if state["prev_target_dist"] is not None:
-                reward += 0.01 * (state["prev_target_dist"] - nearest_target_dist)
+                reward += 0.05 * (state["prev_target_dist"] - nearest_target_dist)
             state["prev_target_dist"] = nearest_target_dist
         else:
             state["prev_target_dist"] = None

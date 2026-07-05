@@ -41,6 +41,32 @@ from models.ppo import PPOConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+class RunningMeanStd:
+    """Welford online estimator — tracks variance of returns across all iterations."""
+    def __init__(self):
+        self.mean  = 0.0
+        self.var   = 1.0
+        self.count = 0
+
+    def update(self, x: np.ndarray) -> None:
+        batch_mean  = float(x.mean())
+        batch_var   = float(x.var())
+        batch_count = len(x)
+        total       = self.count + batch_count
+        delta       = batch_mean - self.mean
+        self.mean  += delta * batch_count / total
+        self.var    = (
+            self.var * self.count
+            + batch_var * batch_count
+            + delta ** 2 * self.count * batch_count / total
+        ) / total
+        self.count  = total
+
+    @property
+    def std(self) -> float:
+        return float(np.sqrt(self.var + 1e-8))
+
+
 def _ts() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
 
@@ -171,6 +197,7 @@ def train(args: argparse.Namespace) -> None:
     _log(f"Total iters   : {total_iters:,}", args.log_file)
     _log(f"Total steps   : {total_iters * steps_per_iter:,}", args.log_file)
     _log(f"Eval envs     : {args.n_eval}  (seeds {eval_seeds[0]}–{eval_seeds[-1]}, every {args.eval_interval} iters)", args.log_file)
+    _log(f"Reward norm   : {'off' if args.no_reward_norm else 'on (RunningMeanStd over returns)'}", args.log_file)
 
     # ── Initial obs ──────────────────────────────────────────────────────────
     obs_np, _ = envs.reset(seed=42)
@@ -184,6 +211,7 @@ def train(args: argparse.Namespace) -> None:
     best_eval_reward = -np.inf
     global_step      = 0
     t_start          = time.time()
+    ret_rms          = RunningMeanStd()  # tracks return variance for normalization
 
     # ── Main loop ────────────────────────────────────────────────────────────
     for iteration in range(1, total_iters + 1):
@@ -222,6 +250,14 @@ def train(args: argparse.Namespace) -> None:
 
         last_value = policy.get_value(obs)
         ppo.buffer.compute_gae(last_value, done, config.gamma, config.gae_lambda)
+
+        if not args.no_reward_norm:
+            ret_np = ppo.buffer.returns.cpu().numpy().flatten()
+            ret_rms.update(ret_np)
+            scale = ret_rms.std
+            ppo.buffer.returns    /= scale
+            ppo.buffer.advantages /= scale
+
         metrics = ppo.update()
 
         # ── Logging ──────────────────────────────────────────────────────────
@@ -292,7 +328,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-envs",        type=int,   default=8)
     parser.add_argument("--n-steps",         type=int,   default=128)
     parser.add_argument("--lr",              type=float, default=2.5e-4)
-    parser.add_argument("--entropy-coef",    type=float, default=0.05)
+    parser.add_argument("--entropy-coef",    type=float, default=0.01)
     parser.add_argument("--no-anneal-lr",    action="store_true")
     parser.add_argument("--save-dir",        default="models/state_mlp")
     parser.add_argument("--log-file",        default="logs/train_state_run1.log")
@@ -304,5 +340,7 @@ if __name__ == "__main__":
                         help="Number of targets in the game (curriculum: start low)")
     parser.add_argument("--load-checkpoint", type=str,   default=None,
                         help="Load policy weights from this checkpoint before training")
+    parser.add_argument("--no-reward-norm", action="store_true",
+                        help="Disable return normalization (on by default)")
     args = parser.parse_args()
     train(args)
