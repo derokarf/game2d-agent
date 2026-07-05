@@ -295,6 +295,40 @@ class EpisodicLifeWrapper(gymnasium.Wrapper):
 
 
 # ---------------------------------------------------------------------------
+# 7. Action Repeat
+# ---------------------------------------------------------------------------
+
+class ActionRepeatWrapper(gymnasium.Wrapper):
+    """
+    Repeat the chosen action for `repeat` consecutive game steps.
+
+    Why action repeat?
+    - Without it, the agent can flip direction every single step, producing
+      visible oscillation even when the policy mildly prefers one direction.
+    - With repeat=3 the agent commits to a direction for 3 frames, making
+      sub-3-step oscillation physically impossible.
+    - Rewards from all sub-steps are summed so the agent still sees the full
+      reward signal — it just acts less frequently.
+
+    Typical values: repeat=2 (subtle), repeat=3 (standard), repeat=4 (Atari).
+    """
+
+    def __init__(self, env: gymnasium.Env, repeat: int = 3):
+        super().__init__(env)
+        assert repeat >= 1
+        self.repeat = repeat
+
+    def step(self, action):
+        total_reward = 0.0
+        for _ in range(self.repeat):
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+            if terminated or truncated:
+                break
+        return obs, total_reward, terminated, truncated, info
+
+
+# ---------------------------------------------------------------------------
 # Convenience factory
 # ---------------------------------------------------------------------------
 

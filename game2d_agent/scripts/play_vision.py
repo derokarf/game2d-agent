@@ -22,8 +22,10 @@ import numpy as np
 import torch
 
 from envs.pixel_env import PixelGameEnv
+from envs.wrappers import ActionRepeatWrapper
 from models.vision_encoder import VisionEncoder
 from models.mlp_policy import MLPActorCritic
+from models.gru_policy import GRUActorCritic
 
 
 def load_policy(checkpoint_path: str, encoder_path: str, device: torch.device):
@@ -31,7 +33,6 @@ def load_policy(checkpoint_path: str, encoder_path: str, device: torch.device):
 
     encoder = VisionEncoder.load(encoder_path, device=device)
     if "encoder_state_dict" in ckpt:
-        # Fine-tuned encoder saved inside the checkpoint — use those weights
         encoder.load_state_dict(ckpt["encoder_state_dict"])
         print("Encoder: loaded fine-tuned weights from checkpoint")
     else:
@@ -39,23 +40,37 @@ def load_policy(checkpoint_path: str, encoder_path: str, device: torch.device):
     encoder.eval()
     encoder.freeze()
 
-    policy = MLPActorCritic(
-        obs_dim   = ckpt["embed_dim"],
-        n_actions = ckpt["n_actions"],
-        hidden    = (256, 128),
-    )
+    policy_type = ckpt.get("policy_type", "mlp")
+    if policy_type == "gru":
+        policy = GRUActorCritic(
+            obs_dim    = ckpt["embed_dim"],
+            hidden_dim = ckpt["hidden_dim"],
+            n_actions  = ckpt["n_actions"],
+        )
+        print(f"Policy: GRU  (hidden_dim={ckpt['hidden_dim']})")
+    else:
+        policy = MLPActorCritic(
+            obs_dim   = ckpt["embed_dim"],
+            n_actions = ckpt["n_actions"],
+            hidden    = (256, 128),
+        )
+        print("Policy: MLP  (256→128)")
+
     policy.load_state_dict(ckpt["policy_state_dict"])
     policy.eval()
     policy.to(device)
 
-    return encoder, policy
+    return encoder, policy, policy_type
 
 
-def run_episode(encoder, policy, env, device, deterministic=False, temperature=1.0):
+def run_episode(encoder, policy, policy_type, env, device, deterministic=False, temperature=1.0):
     obs_raw, _ = env.reset()
     total_reward = 0.0
     steps = 0
     frames = []
+
+    # GRU hidden state (unused for MLP)
+    h = policy.initial_state(1, device) if policy_type == "gru" else None
 
     while True:
         frame = env.render()
@@ -64,14 +79,24 @@ def run_episode(encoder, policy, env, device, deterministic=False, temperature=1
 
         t = torch.from_numpy(obs_raw).permute(2, 0, 1).unsqueeze(0).float().div(255.0).to(device)
         with torch.no_grad():
-            obs_enc = encoder(t)                              # (1, 64)
-            if deterministic:
-                action = torch.tensor([policy.act(obs_enc)])  # argmax — no sampling
-            elif temperature != 1.0:
-                logits, _ = policy.forward(obs_enc)
-                action = torch.distributions.Categorical(logits=logits / temperature).sample()
+            obs_enc = encoder(t)   # (1, 64)
+
+            if policy_type == "gru":
+                logits, _, h = policy.forward(obs_enc, h)
+                if deterministic:
+                    action = logits.argmax(dim=-1)
+                elif temperature != 1.0:
+                    action = torch.distributions.Categorical(logits=logits / temperature).sample()
+                else:
+                    action = torch.distributions.Categorical(logits=logits).sample()
             else:
-                action, _, _, _ = policy.get_action_and_value(obs_enc)
+                if deterministic:
+                    action = torch.tensor([policy.act(obs_enc)])
+                elif temperature != 1.0:
+                    logits, _ = policy.forward(obs_enc)
+                    action = torch.distributions.Categorical(logits=logits / temperature).sample()
+                else:
+                    action, _, _, _ = policy.get_action_and_value(obs_enc)
 
         obs_raw, reward, terminated, truncated, info = env.step(action.item())
         total_reward += reward
@@ -96,7 +121,7 @@ def play(args):
     print(f"Checkpoint : {args.checkpoint}")
     print(f"Encoder    : {args.encoder}")
 
-    encoder, policy = load_policy(args.checkpoint, args.encoder, device)
+    encoder, policy, policy_type = load_policy(args.checkpoint, args.encoder, device)
 
     all_frames = []
     results = []
@@ -110,8 +135,10 @@ def play(args):
     print(f"Rendering {args.episodes} episode(s) ...  [{mode}]\n")
     for ep in range(1, args.episodes + 1):
         env = PixelGameEnv(frame_size=(84, 84), render_mode="rgb_array", max_steps=args.max_steps)
+        if args.action_repeat > 1:
+            env = ActionRepeatWrapper(env, repeat=args.action_repeat)
         reward, steps, score, frames = run_episode(
-            encoder, policy, env, device, args.deterministic, args.temperature
+            encoder, policy, policy_type, env, device, args.deterministic, args.temperature
         )
         env.close()
 
@@ -139,7 +166,9 @@ if __name__ == "__main__":
     parser.add_argument("--live",          action="store_true")
     parser.add_argument("--deterministic", action="store_true",
                         help="Pick highest-confidence action every step (no sampling)")
-    parser.add_argument("--temperature",   type=float, default=1.0,
+    parser.add_argument("--temperature",    type=float, default=1.0,
                         help="Sampling temperature: <1 more decisive, >1 more random (default 1.0)")
+    parser.add_argument("--action-repeat",  type=int,   default=1,
+                        help="Repeat each action N game steps — must match training setting")
     args = parser.parse_args()
     play(args)
