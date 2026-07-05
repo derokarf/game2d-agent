@@ -1,8 +1,8 @@
 """
 PPO training on true game state (diagnostic run).
 
-Bypasses the CNN entirely — the MLP receives a perfect 18-dim state vector
-(player position, target directions/distances, obstacle distance) directly
+Bypasses the CNN entirely — the MLP receives a perfect 26-dim state vector
+(player pos, 5 targets × dx/dy/dist, 3 obstacles × dx/dy/dist) directly
 from the game engine.
 
 If the MLP learns well here, the bottleneck in previous runs was the CNN
