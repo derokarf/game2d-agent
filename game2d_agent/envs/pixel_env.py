@@ -38,6 +38,7 @@ class PixelGameEnv(gymnasium.Env):
 
         self.screen_width = 640
         self.screen_height = 480
+        self._player_radius = 20
         self.screen = None
         self.clock = None
 
@@ -97,15 +98,24 @@ class PixelGameEnv(gymnasium.Env):
         return targets
 
     def _spawn_obstacles(self, count):
-        return [
-            {
-                "x": np.random.randint(50, self.screen_width - 50),
-                "y": np.random.randint(50, self.screen_height - 50),
-                "w": np.random.randint(60, 120),
-                "h": np.random.randint(60, 120),
-            }
-            for _ in range(count)
-        ]
+        obstacles = []
+        min_sep = 120  # minimum center-to-center distance between obstacles
+        for _ in range(count * 50):
+            w = np.random.randint(60, 120)
+            h = np.random.randint(60, 120)
+            x = np.random.randint(50, self.screen_width  - 50 - w)
+            y = np.random.randint(50, self.screen_height - 50 - h)
+            cx, cy = x + w / 2.0, y + h / 2.0
+            too_close = any(
+                np.sqrt((cx - (o["x"] + o["w"] / 2.0)) ** 2
+                        + (cy - (o["y"] + o["h"] / 2.0)) ** 2) < min_sep
+                for o in obstacles
+            )
+            if not too_close:
+                obstacles.append({"x": x, "y": y, "w": w, "h": h})
+            if len(obstacles) == count:
+                break
+        return obstacles
 
     def _safe_spawn(self):
         """Return a (x, y) position that doesn't overlap any obstacle."""
@@ -123,24 +133,38 @@ class PixelGameEnv(gymnasium.Env):
                 return x, y
         return self.screen_width // 2, self.screen_height // 2
 
+    def _blocked(self, x, y):
+        """True if point (x, y) is within the player radius of any obstacle edge."""
+        for obs in self.game_state["obstacles"]:
+            cx = np.clip(x, obs["x"], obs["x"] + obs["w"])
+            cy = np.clip(y, obs["y"], obs["y"] + obs["h"])
+            if np.sqrt((x - cx) ** 2 + (y - cy) ** 2) < self._player_radius:
+                return True
+        return False
+
     def _apply_action(self, action):
         state = self.game_state
-        if action == 0:
-            pass
-        elif action == 1:
-            state["player_x"] -= state["player_speed"]
+        prev_x, prev_y = state["player_x"], state["player_y"]
+        new_x, new_y = prev_x, prev_y
+        if action == 1:
+            new_x -= state["player_speed"]
         elif action == 2:
-            state["player_x"] += state["player_speed"]
+            new_x += state["player_speed"]
         elif action == 3:
-            state["player_y"] -= state["player_speed"]
+            new_y -= state["player_speed"]
         elif action == 4:
-            state["player_y"] += state["player_speed"]
+            new_y += state["player_speed"]
 
-        clipped_x = np.clip(state["player_x"], 0, self.screen_width)
-        clipped_y = np.clip(state["player_y"], 0, self.screen_height)
-        self._hit_wall = (clipped_x != state["player_x"]) or (clipped_y != state["player_y"])
-        state["player_x"] = clipped_x
-        state["player_y"] = clipped_y
+        clipped_x = np.clip(new_x, 0, self.screen_width)
+        clipped_y = np.clip(new_y, 0, self.screen_height)
+        self._hit_wall = (clipped_x != new_x) or (clipped_y != new_y)
+
+        # Obstacles are solid: block the move (per-axis) if it would enter one.
+        # Per-axis lets the player slide along a wall instead of sticking.
+        if not self._blocked(clipped_x, prev_y):
+            state["player_x"] = clipped_x
+        if not self._blocked(state["player_x"], clipped_y):
+            state["player_y"] = clipped_y
 
     def _render_frame(self):
         self._init_pygame()
@@ -192,22 +216,9 @@ class PixelGameEnv(gymnasium.Env):
             reward += 50.0
             nearest_target_dist = float("inf")  # recalc after respawn
 
-        # ── Obstacle proximity ────────────────────────────────────────────────
-        nearest_obstacle_dist = float("inf")
-        hit_obstacle = False
-        for obs in state["obstacles"]:
-            # Distance to nearest edge of the obstacle rectangle
-            cx = np.clip(px, obs["x"], obs["x"] + obs["w"])
-            cy = np.clip(py, obs["y"], obs["y"] + obs["h"])
-            dist = np.sqrt((px - cx) ** 2 + (py - cy) ** 2)
-            nearest_obstacle_dist = min(nearest_obstacle_dist, dist)
-
-            if dist == 0:  # player is inside the obstacle
-                if not hit_obstacle:
-                    reward -= 20.0
-                    state["lives"] -= 1
-                    state["player_x"], state["player_y"] = self._safe_spawn()
-                    hit_obstacle = True
+        # Obstacles are solid walls (movement is blocked in _apply_action), so
+        # there is no collision penalty — the agent physically cannot enter one
+        # and must route around. Perception of obstacles is still in the obs.
 
         # ── Shaping ───────────────────────────────────────────────────────────
         # Approach reward k=0.05. Reset prev on collection so the jump to the
