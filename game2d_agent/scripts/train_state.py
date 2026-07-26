@@ -328,7 +328,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-envs",        type=int,   default=8)
     parser.add_argument("--n-steps",         type=int,   default=128)
     parser.add_argument("--lr",              type=float, default=2.5e-4)
-    parser.add_argument("--entropy-coef",    type=float, default=0.01)
+    parser.add_argument("--entropy-coef",    type=float, default=0.03)
     parser.add_argument("--no-anneal-lr",    action="store_true")
     parser.add_argument("--save-dir",        default="models/state_mlp")
     parser.add_argument("--log-file",        default="logs/train_state_run1.log")

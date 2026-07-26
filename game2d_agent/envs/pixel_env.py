@@ -98,21 +98,29 @@ class PixelGameEnv(gymnasium.Env):
         return targets
 
     def _spawn_obstacles(self, count):
+        # Every gap between obstacles must be at least the agent's passable
+        # width. The agent is blocked within player_radius of an edge, so a
+        # corridor needs > 2*player_radius of clearance to traverse. A thinner
+        # slot is impassable, yet the (infinitely thin) rays and line-of-sight
+        # check would still "see" through it — luring the agent into a trap.
+        min_gap = 2 * self._player_radius + 12  # comfortably passable corridor
+
+        def edge_gap(a, b):
+            dx = max(b["x"] - (a["x"] + a["w"]), a["x"] - (b["x"] + b["w"]), 0.0)
+            dy = max(b["y"] - (a["y"] + a["h"]), a["y"] - (b["y"] + b["h"]), 0.0)
+            return np.sqrt(dx * dx + dy * dy)
+
         obstacles = []
-        min_sep = 120  # minimum center-to-center distance between obstacles
-        for _ in range(count * 50):
+        for _ in range(count * 100):
             w = np.random.randint(60, 120)
             h = np.random.randint(60, 120)
             x = np.random.randint(50, self.screen_width  - 50 - w)
             y = np.random.randint(50, self.screen_height - 50 - h)
-            cx, cy = x + w / 2.0, y + h / 2.0
-            too_close = any(
-                np.sqrt((cx - (o["x"] + o["w"] / 2.0)) ** 2
-                        + (cy - (o["y"] + o["h"] / 2.0)) ** 2) < min_sep
-                for o in obstacles
-            )
-            if not too_close:
-                obstacles.append({"x": x, "y": y, "w": w, "h": h})
+            cand = {"x": x, "y": y, "w": w, "h": h}
+            # Reject if it would form a too-narrow (impassable) gap with any
+            # existing obstacle. gap == 0 means overlapping, also rejected.
+            if all(edge_gap(cand, o) >= min_gap for o in obstacles):
+                obstacles.append(cand)
             if len(obstacles) == count:
                 break
         return obstacles
@@ -139,6 +147,43 @@ class PixelGameEnv(gymnasium.Env):
             cx = np.clip(x, obs["x"], obs["x"] + obs["w"])
             cy = np.clip(y, obs["y"], obs["y"] + obs["h"])
             if np.sqrt((x - cx) ** 2 + (y - cy) ** 2) < self._player_radius:
+                return True
+        return False
+
+    def _segment_blocked(self, x0, y0, x1, y1):
+        """True if the segment (x0,y0)->(x1,y1) passes through any obstacle.
+
+        Liang-Barsky clip of the parametric segment against each obstacle's
+        axis-aligned box; if any box clips a sub-interval of t in [0,1], the
+        line of sight is obstructed.
+        """
+        dx, dy = x1 - x0, y1 - y0
+        for obs in self.game_state["obstacles"]:
+            xmin, ymin = obs["x"], obs["y"]
+            xmax, ymax = obs["x"] + obs["w"], obs["y"] + obs["h"]
+            t0, t1 = 0.0, 1.0
+            hit = True
+            for p, q in ((-dx, x0 - xmin), (dx, xmax - x0),
+                         (-dy, y0 - ymin), (dy, ymax - y0)):
+                if p == 0:
+                    if q < 0:           # parallel and outside this slab
+                        hit = False
+                        break
+                else:
+                    r = q / p
+                    if p < 0:
+                        if r > t1:
+                            hit = False
+                            break
+                        if r > t0:
+                            t0 = r
+                    else:
+                        if r < t0:
+                            hit = False
+                            break
+                        if r < t1:
+                            t1 = r
+            if hit and t0 <= t1:
                 return True
         return False
 
@@ -200,9 +245,12 @@ class PixelGameEnv(gymnasium.Env):
         # ── Target collection ─────────────────────────────────────────────────
         collected = []
         nearest_target_dist = float("inf")
+        nearest_tx = nearest_ty = None
         for i, tgt in enumerate(state["targets"]):
             dist = np.sqrt((px - tgt["x"]) ** 2 + (py - tgt["y"]) ** 2)
-            nearest_target_dist = min(nearest_target_dist, dist)
+            if dist < nearest_target_dist:
+                nearest_target_dist = dist
+                nearest_tx, nearest_ty = tgt["x"], tgt["y"]
             if dist < tgt["radius"] + 20:
                 collected.append(i)
                 reward += 10.0
@@ -221,12 +269,19 @@ class PixelGameEnv(gymnasium.Env):
         # and must route around. Perception of obstacles is still in the obs.
 
         # ── Shaping ───────────────────────────────────────────────────────────
-        # Approach reward k=0.05. Reset prev on collection so the jump to the
-        # next target doesn't produce a negative penalty (which taught hovering).
+        # Approach reward k=0.05, gated by line-of-sight. Only reward getting
+        # closer when the straight path to the nearest target is unobstructed —
+        # otherwise "closer" means "into the wall", which is what taught jamming.
+        # When a wall blocks the target the pull vanishes, so the agent must
+        # explore around; once it rounds the corner and regains line-of-sight
+        # the approach reward switches back on and guides it in.
+        # Reset prev on collection so the jump to the next target doesn't produce
+        # a negative penalty (which taught hovering).
         if collected:
             state["prev_target_dist"] = None
         elif nearest_target_dist != float("inf"):
-            if state["prev_target_dist"] is not None:
+            if (state["prev_target_dist"] is not None
+                    and not self._segment_blocked(px, py, nearest_tx, nearest_ty)):
                 reward += 0.05 * (state["prev_target_dist"] - nearest_target_dist)
             state["prev_target_dist"] = nearest_target_dist
         else:
