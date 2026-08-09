@@ -143,7 +143,8 @@ def train(args: argparse.Namespace) -> None:
                     f"{'ent':>8} | {'kl':>10} | {'ev':>6} | {'lr':>10}\n")
 
     # ── Environments ─────────────────────────────────────────────────────────
-    env_kwargs = dict(max_steps=1000, n_obstacles=args.n_obstacles, n_targets=args.n_targets)
+    env_kwargs = dict(max_steps=1000, n_obstacles=args.n_obstacles, n_targets=args.n_targets,
+                      random_counts=args.random_counts)
     envs = SyncVectorEnv([
         (lambda kw: lambda: StateGameEnv(**kw))(env_kwargs)
         for _ in range(args.num_envs)
@@ -342,5 +343,8 @@ if __name__ == "__main__":
                         help="Load policy weights from this checkpoint before training")
     parser.add_argument("--no-reward-norm", action="store_true",
                         help="Disable return normalization (on by default)")
+    parser.add_argument("--random-counts", action="store_true",
+                        help="Randomize obstacle & target counts each level "
+                             "(uniform in [1, --n-obstacles] and [1, --n-targets])")
     args = parser.parse_args()
     train(args)

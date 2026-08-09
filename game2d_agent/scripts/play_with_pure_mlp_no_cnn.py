@@ -93,7 +93,9 @@ def play(args):
     results = []
 
     for ep in range(1, args.episodes + 1):
-        env = StateGameEnv(max_steps=args.max_steps, render_mode="rgb_array")
+        env = StateGameEnv(max_steps=args.max_steps, render_mode="rgb_array",
+                           n_obstacles=args.n_obstacles, n_targets=args.n_targets,
+                           random_counts=args.random_counts)
         reward, steps, score, frames = run_episode(policy, env, device, args.temperature)
         env.close()
 
@@ -118,5 +120,9 @@ if __name__ == "__main__":
     parser.add_argument("--out",         default="recordings/state_best.gif")
     parser.add_argument("--fps",         type=int,   default=15)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--n-obstacles",  type=int, default=3)
+    parser.add_argument("--n-targets",    type=int, default=5)
+    parser.add_argument("--random-counts", action="store_true",
+                        help="Randomize obstacle & target counts each level (1..n)")
     args = parser.parse_args()
     play(args)
