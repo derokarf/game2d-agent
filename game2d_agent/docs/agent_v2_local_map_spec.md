@@ -99,6 +99,15 @@ config-space, GRU) only if a gate fails, to avoid over-engineering before measur
 - [x] `models/ppo_map.py`
 - [x] `scripts/train_map.py`, `scripts/play_map.py`
 - [x] Pipeline smoke test (obs shapes, CNN forward, 2 PPO iters all finite, ~727 SPS CPU)
-- [ ] Gate 1: stuck diagnostic (no freezes @ temp 0.15)
-- [ ] Gate 2: game-A eval (~600+)
-- [ ] Game B + transfer measurement
+- [x] Gate 1: stuck diagnostic — PASS. 0 true freezes over 4196 frames (run16 had a
+      675-frame dead-freeze). Residual: rare brief (~3s) hesitations at SCREEN EDGES only.
+- [x] Gate 2: game-A eval — PASS. run1 best eval 1143 (mean ~1050-1100), vs run16's 640 (~1.8x).
+      Plateaued by ~1.2M steps; 5M was more than needed.
+- [ ] Game B + transfer measurement (zero-shot -> fine-tune)
+
+## Known residual (map_run1)
+Occasional brief hesitation when pinned against a SCREEN edge/corner with a target in the
+corner. Hypothesis: the map encodes screen boundary in the same "blocked" channel as
+obstacles, so edge vs wall are indistinguishable to the CNN, while they behave differently
+(you can slide along an edge). Candidate fix if we chase it: a separate boundary channel,
+or the spec fallbacks (GRU / mild anti-stall).
