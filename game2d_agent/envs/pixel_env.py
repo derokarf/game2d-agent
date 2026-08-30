@@ -30,6 +30,8 @@ class PixelGameEnv(gymnasium.Env):
         random_counts: bool = False,
         min_obstacles: int = 1,
         min_targets: int = 1,
+        screen_size: tuple = (640, 480),
+        obstacle_size: tuple = (60, 120),
     ):
         super().__init__()
 
@@ -46,8 +48,9 @@ class PixelGameEnv(gymnasium.Env):
         self.min_obstacles = min_obstacles
         self.min_targets   = min_targets
 
-        self.screen_width = 640
-        self.screen_height = 480
+        # Board size and obstacle-size range are per-game (see envs/games.py).
+        self.screen_width, self.screen_height = screen_size
+        self.obstacle_size = obstacle_size          # (min, max) edge length, px
         self._player_radius = 20
         self.screen = None
         self.clock = None
@@ -147,8 +150,8 @@ class PixelGameEnv(gymnasium.Env):
 
         obstacles = []
         for _ in range(count * 100):
-            w = np.random.randint(60, 120)
-            h = np.random.randint(60, 120)
+            w = np.random.randint(self.obstacle_size[0], self.obstacle_size[1])
+            h = np.random.randint(self.obstacle_size[0], self.obstacle_size[1])
             x = np.random.randint(50, self.screen_width  - 50 - w)
             y = np.random.randint(50, self.screen_height - 50 - h)
             cand = {"x": x, "y": y, "w": w, "h": h}

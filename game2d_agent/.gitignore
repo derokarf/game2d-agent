@@ -1,9 +1,24 @@
+# Python env & caches
 .venv/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+
+# OS
+.DS_Store
+
+# Datasets & large media (never push)
+data/
+*.gif
+*.mp4
+*.mov
+
+# Experiment outputs — not tracked at all (checkpoints, logs, recordings).
+runs/
 *.pt
+*.pth
+
+# Legacy top-level output dirs (still written by some older scripts)
 logs/
 recordings/
-*.egg-info/
-.DS_Store

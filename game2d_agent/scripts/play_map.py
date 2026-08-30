@@ -23,6 +23,7 @@ import torch
 from torch.distributions import Categorical
 
 from envs.local_map_env import LocalMapGameEnv, MAP_SIZE, GLOBAL_DIM
+from envs.games import game_kwargs
 from models.cnn_map_policy import CNNMapActorCritic
 
 
@@ -79,7 +80,7 @@ def play(args):
     for ep in range(1, args.episodes + 1):
         env = LocalMapGameEnv(max_steps=args.max_steps, render_mode="rgb_array",
                               n_obstacles=args.n_obstacles, n_targets=args.n_targets,
-                              random_counts=args.random_counts)
+                              random_counts=args.random_counts, **game_kwargs(args.game))
         reward, steps, score, frames = run_episode(policy, env, device, args.temperature)
         env.close()
         all_frames.extend(frames); results.append((reward, steps, score))
@@ -93,14 +94,27 @@ def play(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", default="models/map_run1/checkpoint_best_eval.pt")
+    p.add_argument("--game", default="collect2d", help="game preset to play on (see envs/games.py)")
+    p.add_argument("--checkpoint-game", default=None,
+                   help="game the checkpoint was TRAINED on (for default --checkpoint path); "
+                        "defaults to --game. Set differently for zero-shot transfer.")
+    p.add_argument("--run", default="run1")
+    p.add_argument("--checkpoint", default=None,
+                   help="default: runs/<checkpoint-game>/local_map/<run>/ckpt/checkpoint_best_eval.pt")
     p.add_argument("--episodes", type=int, default=6)
     p.add_argument("--max-steps", type=int, default=1000)
-    p.add_argument("--out", default="recordings/map_run1.gif")
+    p.add_argument("--out", default=None,
+                   help="default: runs/<checkpoint-game>/local_map/<run>/media/play_on_<game>.gif")
     p.add_argument("--fps", type=int, default=15)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--n-obstacles", type=int, default=5)
     p.add_argument("--n-targets", type=int, default=5)
     p.add_argument("--random-counts", action="store_true")
     args = p.parse_args()
+    ckpt_game = args.checkpoint_game or args.game
+    run_dir = f"runs/{ckpt_game}/local_map/{args.run}"
+    if args.checkpoint is None:
+        args.checkpoint = f"{run_dir}/ckpt/checkpoint_best_eval.pt"
+    if args.out is None:
+        args.out = f"{run_dir}/media/play_on_{args.game}.gif"
     play(args)

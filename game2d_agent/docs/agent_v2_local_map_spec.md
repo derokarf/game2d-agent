@@ -103,7 +103,20 @@ config-space, GRU) only if a gate fails, to avoid over-engineering before measur
       675-frame dead-freeze). Residual: rare brief (~3s) hesitations at SCREEN EDGES only.
 - [x] Gate 2: game-A eval — PASS. run1 best eval 1143 (mean ~1050-1100), vs run16's 640 (~1.8x).
       Plateaued by ~1.2M steps; 5M was more than needed.
-- [ ] Game B + transfer measurement (zero-shot -> fine-tune)
+- [x] Game B + transfer measurement — PASS. Game B (`collect2d_b`: 800x600, obstacles
+      50-160, same "collect all" task). Zero-shot A->B = 921.6 reward / 7.2 boards, vs
+      from-scratch B ceiling 933.7 -> **98.7% of ceiling, transfer essentially complete**
+      (fine-tune unnecessary). Confirms the egocentric perception contract generalizes
+      across board/obstacle size. NOTE: this is the *gentle* transfer (same task; the
+      egocentric window makes board size nearly invisible). Harder tests below.
+
+## Next transfer stress-tests (where the skill might actually break)
+The size-only transfer succeeded almost perfectly, so it under-tests the contract. Harder
+game variants that keep the perception contract but change what's learned:
+- **New objective:** "reach the exit" (one goal cell) instead of "collect all" — tests
+  whether goal-seeking transfers, not just obstacle avoidance.
+- **Dynamics:** moving obstacles — tests reactive avoidance the static game never trained.
+- **Denser/among clutter:** many small obstacles (maze-like) vs few big ones.
 
 ## Known residual (map_run1)
 Occasional brief hesitation when pinned against a SCREEN edge/corner with a target in the

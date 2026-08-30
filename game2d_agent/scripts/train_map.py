@@ -29,6 +29,7 @@ import torch
 from gymnasium.vector import SyncVectorEnv
 
 from envs.local_map_env import LocalMapGameEnv, MAP_SIZE, GLOBAL_DIM
+from envs.games import game_kwargs
 from models.cnn_map_policy import CNNMapActorCritic
 from models.ppo_map import VectorMapPPO
 from models.ppo import PPOConfig
@@ -119,7 +120,7 @@ def train(args):
         open(args.log_file, "w").close()
 
     env_kwargs = dict(max_steps=1000, n_obstacles=args.n_obstacles, n_targets=args.n_targets,
-                      random_counts=args.random_counts)
+                      random_counts=args.random_counts, **game_kwargs(args.game))
     envs = SyncVectorEnv([(lambda kw: lambda: LocalMapGameEnv(**kw))(env_kwargs)
                           for _ in range(args.num_envs)])
     eval_seeds = list(range(1000, 1000 + args.n_eval))
@@ -250,8 +251,10 @@ if __name__ == "__main__":
     p.add_argument("--lr", type=float, default=2.5e-4)
     p.add_argument("--entropy-coef", type=float, default=0.03)
     p.add_argument("--no-anneal-lr", action="store_true")
-    p.add_argument("--save-dir", default="models/map_run1")
-    p.add_argument("--log-file", default="logs/train_map_run1.log")
+    p.add_argument("--game", default="collect2d", help="game preset (see envs/games.py)")
+    p.add_argument("--run",  default="run1", help="run id; sets default output paths")
+    p.add_argument("--save-dir", default=None, help="default: runs/<game>/local_map/<run>/ckpt")
+    p.add_argument("--log-file", default=None, help="default: runs/<game>/local_map/<run>/train.log")
     p.add_argument("--eval-interval", type=int, default=20)
     p.add_argument("--n-eval", type=int, default=32)
     p.add_argument("--n-obstacles", type=int, default=5)
@@ -260,4 +263,9 @@ if __name__ == "__main__":
     p.add_argument("--no-reward-norm", action="store_true")
     p.add_argument("--load-checkpoint", type=str, default=None)
     args = p.parse_args()
+    run_dir = f"runs/{args.game}/local_map/{args.run}"
+    if args.save_dir is None:
+        args.save_dir = f"{run_dir}/ckpt"
+    if args.log_file is None:
+        args.log_file = f"{run_dir}/train.log"
     train(args)

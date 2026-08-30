@@ -34,11 +34,13 @@ class LocalMapGameEnv(PixelGameEnv):
 
     def __init__(self, max_steps: int = 1000, n_obstacles: int = 3, n_targets: int = 5,
                  render_mode: str | None = None, random_counts: bool = False,
-                 min_obstacles: int = 1, min_targets: int = 1):
+                 min_obstacles: int = 1, min_targets: int = 1,
+                 screen_size: tuple = (640, 480), obstacle_size: tuple = (60, 120)):
         super().__init__(frame_size=(84, 84), render_mode=render_mode, max_steps=max_steps,
                          n_obstacles=n_obstacles, n_targets=n_targets,
                          random_counts=random_counts, min_obstacles=min_obstacles,
-                         min_targets=min_targets)
+                         min_targets=min_targets, screen_size=screen_size,
+                         obstacle_size=obstacle_size)
         self.observation_space = spaces.Dict({
             "map":    spaces.Box(0.0, 1.0, shape=(2, MAP_SIZE, MAP_SIZE), dtype=np.float32),
             "global": spaces.Box(-2.0, 2.0, shape=(GLOBAL_DIM,), dtype=np.float32),
